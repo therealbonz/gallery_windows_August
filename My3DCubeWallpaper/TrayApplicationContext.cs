@@ -34,6 +34,7 @@ namespace My3DCubeWallpaper
             _mouseHook = new GlobalMouseHook();
             _mouseHook.DragRotate += OnGlobalDragRotate;
             _mouseHook.MouseHover += OnGlobalMouseMove;
+            _mouseHook.DesktopClick += OnGlobalDesktopClick;
 
             // 4. Build ContextMenuStrip
             var contextMenu = new ContextMenuStrip();
@@ -217,6 +218,25 @@ namespace My3DCubeWallpaper
             catch
             {
                 // Non-critical hover failure ignored
+            }
+        }
+
+        private void OnGlobalDesktopClick(Point pt)
+        {
+            try
+            {
+                var screen = Screen.FromPoint(pt);
+                var targetForm = _wallpaperForms.FirstOrDefault(f => f.TargetScreen.DeviceName == screen.DeviceName);
+                if (targetForm != null)
+                {
+                    int localX = pt.X - screen.Bounds.X;
+                    int localY = pt.Y - screen.Bounds.Y;
+                    _ = targetForm.SendScreenCrackAsync(localX, localY);
+                }
+            }
+            catch
+            {
+                // Non-critical crack failure ignored
             }
         }
 

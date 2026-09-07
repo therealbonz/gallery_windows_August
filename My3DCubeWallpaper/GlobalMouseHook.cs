@@ -22,6 +22,7 @@ namespace My3DCubeWallpaper
 
         public event Action<Point, int, int>? DragRotate;
         public event Action<Point>? MouseHover;
+        public event Action<Point>? DesktopClick;
         private long _lastHoverTick = 0;
 
         public GlobalMouseHook()
@@ -51,6 +52,7 @@ namespace My3DCubeWallpaper
                     {
                         _isDragging = true;
                         _lastPoint = pt;
+                        DesktopClick?.Invoke(pt);
                     }
                 }
                 else if (msg == WM_MOUSEMOVE)

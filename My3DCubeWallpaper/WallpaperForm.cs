@@ -183,6 +183,14 @@ namespace My3DCubeWallpaper
             }
         }
 
+        public async Task SendScreenCrackAsync(int clientX, int clientY)
+        {
+            if (_webView.CoreWebView2 != null)
+            {
+                await _webView.CoreWebView2.ExecuteScriptAsync($"window.postMessage({{ action: 'screenCrack', clientX: {clientX}, clientY: {clientY} }}, '*');");
+            }
+        }
+
         public void Reload()
         {
             _webView.Reload();

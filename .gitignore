@@ -25,3 +25,6 @@ bld/
 *.WebView2/
 EBWebView/
 *.log
+publish/*.dll
+publish/*.json
+publish/runtimes/
