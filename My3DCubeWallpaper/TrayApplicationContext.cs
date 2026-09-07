@@ -94,6 +94,24 @@ namespace My3DCubeWallpaper
             speedMenu.DropDownItems.AddRange(new ToolStripItem[] { speedSlow, speedNormal, speedFast });
             contextMenu.Items.Add(speedMenu);
 
+            // Weather submenu
+            var weatherMenu = new ToolStripMenuItem("🌧️ Weather FX");
+            var weatherRain = new ToolStripMenuItem("🌧️ Rain & Glass Droplets", null, async (s, e) => await SetWeatherAll("rain", s)) { Checked = true };
+            var weatherSnow = new ToolStripMenuItem("❄️ Snow Flurries", null, async (s, e) => await SetWeatherAll("snow", s));
+            var weatherCloudy = new ToolStripMenuItem("☁️ Overcast Mist", null, async (s, e) => await SetWeatherAll("cloudy", s));
+            var weatherClear = new ToolStripMenuItem("✨ Clear Stardust", null, async (s, e) => await SetWeatherAll("clear", s));
+            var weatherAuto = new ToolStripMenuItem("⚡ Auto-Detect Live Weather", null, async (s, e) => await SetWeatherAll("auto", s));
+            weatherMenu.DropDownItems.AddRange(new ToolStripItem[] { weatherRain, weatherSnow, weatherCloudy, weatherClear, weatherAuto });
+            contextMenu.Items.Add(weatherMenu);
+
+            // Audio Visualizer submenu
+            var audioMenu = new ToolStripMenuItem("🎵 Music Visualizer");
+            var audioOff = new ToolStripMenuItem("Off", null, async (s, e) => await SetAudioAll("off", s)) { Checked = true };
+            var audioBeat = new ToolStripMenuItem("🥁 Synth Beat Demo", null, async (s, e) => await SetAudioAll("beat", s));
+            var audioMic = new ToolStripMenuItem("🎤 Microphone / Music Listen", null, async (s, e) => await SetAudioAll("mic", s));
+            audioMenu.DropDownItems.AddRange(new ToolStripItem[] { audioOff, audioBeat, audioMic });
+            contextMenu.Items.Add(audioMenu);
+
             contextMenu.Items.Add(new ToolStripSeparator());
 
             // Start with Windows toggle
@@ -216,6 +234,40 @@ namespace My3DCubeWallpaper
             foreach (var form in _wallpaperForms)
             {
                 await form.SetRotationSpeedAsync(speed);
+            }
+        }
+
+        private async Task SetWeatherAll(string weather, object? sender)
+        {
+            if (sender is ToolStripMenuItem item && item.OwnerItem is ToolStripMenuItem parent)
+            {
+                foreach (ToolStripItem child in parent.DropDownItems)
+                {
+                    if (child is ToolStripMenuItem mi) mi.Checked = false;
+                }
+                item.Checked = true;
+            }
+
+            foreach (var form in _wallpaperForms)
+            {
+                await form.SetWeatherAsync(weather);
+            }
+        }
+
+        private async Task SetAudioAll(string mode, object? sender)
+        {
+            if (sender is ToolStripMenuItem item && item.OwnerItem is ToolStripMenuItem parent)
+            {
+                foreach (ToolStripItem child in parent.DropDownItems)
+                {
+                    if (child is ToolStripMenuItem mi) mi.Checked = false;
+                }
+                item.Checked = true;
+            }
+
+            foreach (var form in _wallpaperForms)
+            {
+                await form.SetAudioModeAsync(mode);
             }
         }
 

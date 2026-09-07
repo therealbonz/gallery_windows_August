@@ -167,6 +167,22 @@ namespace My3DCubeWallpaper
             }
         }
 
+        public async Task SetWeatherAsync(string weather)
+        {
+            if (_webView.CoreWebView2 != null)
+            {
+                await _webView.CoreWebView2.ExecuteScriptAsync($"window.postMessage({{ action: 'setWeather', weather: '{weather}' }}, '*');");
+            }
+        }
+
+        public async Task SetAudioModeAsync(string mode)
+        {
+            if (_webView.CoreWebView2 != null)
+            {
+                await _webView.CoreWebView2.ExecuteScriptAsync($"window.postMessage({{ action: 'setAudioMode', mode: '{mode}' }}, '*');");
+            }
+        }
+
         public void Reload()
         {
             _webView.Reload();
