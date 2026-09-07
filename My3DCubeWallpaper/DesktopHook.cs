@@ -1,5 +1,7 @@
 using System;
+using System.Drawing;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Windows.Forms;
 
 namespace My3DCubeWallpaper
@@ -10,6 +12,9 @@ namespace My3DCubeWallpaper
         private const int SWP_SHOWWINDOW = 0x0040;
         private const int SWP_NOACTIVATE = 0x0010;
         private const int SWP_ASYNCWINDOWPOS = 0x4000;
+        private const int SWP_NOMOVE = 0x0002;
+        private const int SWP_NOSIZE = 0x0001;
+        private static readonly IntPtr HWND_BOTTOM = new IntPtr(1);
 
         [DllImport("user32.dll", SetLastError = true)]
         private static extern IntPtr FindWindow(string? lpClassName, string? lpWindowName);
@@ -46,14 +51,17 @@ namespace My3DCubeWallpaper
         [DllImport("user32.dll", SetLastError = true)]
         private static extern int GetWindowLong(IntPtr hWnd, int nIndex);
 
+        [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+        private static extern int GetClassName(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
+
         private const int GWL_EXSTYLE = -20;
         private const int WS_EX_TOOLWINDOW = 0x00000080;
         private const int WS_EX_NOACTIVATE = 0x08000000;
 
         /// <summary>
-        /// Locates the WorkerW window directly behind desktop icons and docks the wallpaper window onto it.
+        /// Locates the background WorkerW layer behind desktop icons and docks the wallpaper window underneath them.
         /// </summary>
-        public static bool AttachToDesktop(IntPtr formHandle, System.Drawing.Rectangle? customBounds = null)
+        public static bool AttachToDesktop(IntPtr formHandle, Rectangle? customBounds = null)
         {
             try
             {
@@ -61,56 +69,101 @@ namespace My3DCubeWallpaper
                 IntPtr progman = FindWindow("Progman", null);
                 if (progman == IntPtr.Zero)
                 {
-                    return false;
+                    progman = FindWindow("Progman", "Program Manager");
                 }
 
-                // 2. Send 0x052C message to Progman to spawn a WorkerW window behind icons
-                SendMessageTimeout(
-                    progman,
-                    WM_SPAWN_WORKERW,
-                    new IntPtr(0xD),
-                    new IntPtr(0x1),
-                    0,
-                    1000,
-                    out _);
+                if (progman != IntPtr.Zero)
+                {
+                    // 2. Send 0x052C message to Progman to spawn the background WorkerW layer
+                    SendMessageTimeout(
+                        progman,
+                        WM_SPAWN_WORKERW,
+                        new IntPtr(0xD),
+                        new IntPtr(0x1),
+                        0,
+                        1000,
+                        out _);
+                }
 
-                // 3. Find the WorkerW window that sits behind SHELLDLL_DefView
-                IntPtr workerW = IntPtr.Zero;
+                // 3. Find the dedicated background WorkerW (the one without SHELLDLL_DefView)
+                IntPtr wallpaperWorkerW = IntPtr.Zero;
+                IntPtr shellWorkerW = IntPtr.Zero;
+                IntPtr shellDefView = IntPtr.Zero;
 
                 EnumWindows((hWnd, lParam) =>
                 {
-                    IntPtr shellDll = FindWindowEx(hWnd, IntPtr.Zero, "SHELLDLL_DefView", null);
-                    if (shellDll != IntPtr.Zero)
+                    var sb = new StringBuilder(256);
+                    GetClassName(hWnd, sb, sb.Capacity);
+                    string cls = sb.ToString();
+
+                    if (cls == "WorkerW")
                     {
-                        // The WorkerW behind the desktop icons is the next sibling window
-                        workerW = FindWindowEx(IntPtr.Zero, hWnd, "WorkerW", null);
+                        IntPtr shell = FindWindowEx(hWnd, IntPtr.Zero, "SHELLDLL_DefView", null);
+                        if (shell != IntPtr.Zero)
+                        {
+                            shellWorkerW = hWnd;
+                            shellDefView = shell;
+                            // Check next sibling WorkerW
+                            IntPtr nextWorker = FindWindowEx(IntPtr.Zero, hWnd, "WorkerW", null);
+                            if (nextWorker != IntPtr.Zero)
+                            {
+                                wallpaperWorkerW = nextWorker;
+                            }
+                        }
+                        else
+                        {
+                            // A WorkerW window without SHELLDLL_DefView is the wallpaper layer
+                            if (wallpaperWorkerW == IntPtr.Zero)
+                            {
+                                wallpaperWorkerW = hWnd;
+                            }
+                        }
                     }
+                    else if (cls == "Progman")
+                    {
+                        IntPtr shell = FindWindowEx(hWnd, IntPtr.Zero, "SHELLDLL_DefView", null);
+                        if (shell != IntPtr.Zero)
+                        {
+                            shellDefView = shell;
+                            shellWorkerW = hWnd;
+                        }
+                    }
+
                     return true;
                 }, IntPtr.Zero);
 
-                // Fallback if WorkerW sibling wasn't found directly
-                if (workerW == IntPtr.Zero)
+                // Target parent window: prefer wallpaperWorkerW, fallback to shellWorkerW or progman
+                IntPtr targetParent = (wallpaperWorkerW != IntPtr.Zero) ? wallpaperWorkerW :
+                                      (shellWorkerW != IntPtr.Zero) ? shellWorkerW : progman;
+
+                if (targetParent == IntPtr.Zero)
                 {
-                    workerW = progman;
+                    return false;
                 }
 
-                // 4. Modify form extended style so it won't show on Alt+Tab or take focus
+                // 4. Modify form extended style so it won't show on Alt+Tab or take keyboard focus
                 int exStyle = GetWindowLong(formHandle, GWL_EXSTYLE);
                 SetWindowLong(formHandle, GWL_EXSTYLE, exStyle | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE);
 
-                // 5. Parent the form to WorkerW
-                SetParent(formHandle, workerW);
+                // 5. Parent the form to the target background window
+                SetParent(formHandle, targetParent);
 
-                // 6. Cover the screen bounds (supports multi-monitor setups)
+                // 6. Cover screen bounds and place strictly at the BOTTOM of the Z-order behind icons
                 var bounds = customBounds ?? SystemInformation.VirtualScreen;
                 SetWindowPos(
                     formHandle,
-                    IntPtr.Zero,
+                    HWND_BOTTOM,
                     bounds.X,
                     bounds.Y,
                     bounds.Width,
                     bounds.Height,
                     SWP_SHOWWINDOW | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS);
+
+                // 7. Ensure SHELLDLL_DefView (the desktop icons) stays above wallpaper
+                if (shellDefView != IntPtr.Zero)
+                {
+                    SetWindowPos(shellDefView, IntPtr.Zero, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+                }
 
                 return true;
             }
@@ -121,9 +174,6 @@ namespace My3DCubeWallpaper
             }
         }
 
-        /// <summary>
-        /// Restores parent to desktop when exiting.
-        /// </summary>
         public static void DetachFromDesktop(IntPtr formHandle)
         {
             try
