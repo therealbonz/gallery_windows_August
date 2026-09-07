@@ -1,5 +1,6 @@
 using System;
 using System.Drawing;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Windows.Forms;
@@ -12,14 +13,33 @@ namespace My3DCubeWallpaper
         private const int SWP_SHOWWINDOW = 0x0040;
         private const int SWP_NOACTIVATE = 0x0010;
         private const int SWP_ASYNCWINDOWPOS = 0x4000;
-        private const int SWP_NOMOVE = 0x0002;
-        private const int SWP_NOSIZE = 0x0001;
         private static readonly IntPtr HWND_BOTTOM = new IntPtr(1);
 
-        [DllImport("user32.dll", SetLastError = true)]
-        private static extern IntPtr FindWindow(string? lpClassName, string? lpWindowName);
+        private const int GWL_EXSTYLE = -20;
+        private const int GWL_STYLE = -16;
+        private const int WS_CHILD = 0x40000000;
+        private const int WS_CLIPSIBLINGS = 0x04000000;
+        private const int WS_EX_TOOLWINDOW = 0x00000080;
+        private const int WS_EX_NOACTIVATE = 0x08000000;
+        private const uint DESKTOP_ALL = 0x01FF;
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct POINT
+        {
+            public int X;
+            public int Y;
+        }
+
+        [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        private static extern IntPtr OpenDesktop(string lpszDesktop, int dwFlags, bool fInherit, uint dwDesiredAccess);
 
         [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool SetThreadDesktop(IntPtr hDesktop);
+
+        [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        private static extern IntPtr FindWindow(string? lpClassName, string? lpWindowName);
+
+        [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
         private static extern IntPtr FindWindowEx(IntPtr parentHandle, IntPtr childAfter, string? className, string? windowTitle);
 
         [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
@@ -51,125 +71,144 @@ namespace My3DCubeWallpaper
         [DllImport("user32.dll", SetLastError = true)]
         private static extern int GetWindowLong(IntPtr hWnd, int nIndex);
 
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool ScreenToClient(IntPtr hWnd, ref POINT lpPoint);
+
         [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
         private static extern int GetClassName(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
 
-        private const int GWL_EXSTYLE = -20;
-        private const int WS_EX_TOOLWINDOW = 0x00000080;
-        private const int WS_EX_NOACTIVATE = 0x08000000;
+        /// <summary>
+        /// Ensures the calling thread is attached to the interactive "default" desktop session.
+        /// </summary>
+        public static void EnsureDefaultDesktop()
+        {
+            try
+            {
+                IntPtr hDefault = OpenDesktop("default", 0, false, DESKTOP_ALL);
+                if (hDefault != IntPtr.Zero)
+                {
+                    SetThreadDesktop(hDefault);
+                }
+            }
+            catch { }
+        }
 
         /// <summary>
-        /// Locates the background WorkerW layer behind desktop icons and docks the wallpaper window underneath them.
+        /// Locates the desktop wallpaper parent layer (behind icons) across all Windows 10/11 versions.
+        /// </summary>
+        public static IntPtr FindWallpaperParent()
+        {
+            EnsureDefaultDesktop();
+
+            IntPtr progman = FindWindow("Progman", null);
+            if (progman == IntPtr.Zero)
+            {
+                progman = FindWindow("Progman", "Program Manager");
+            }
+
+            if (progman != IntPtr.Zero)
+            {
+                // Send 0x052C message to Progman to spawn the background WorkerW layer
+                SendMessageTimeout(progman, WM_SPAWN_WORKERW, new IntPtr(0xD), new IntPtr(0x1), 0, 1000, out _);
+                SendMessageTimeout(progman, WM_SPAWN_WORKERW, IntPtr.Zero, IntPtr.Zero, 0, 1000, out _);
+            }
+
+            IntPtr targetParent = IntPtr.Zero;
+
+            // Strategy 1: Child WorkerW directly inside Progman (behind SHELLDLL_DefView desktop icons)
+            if (progman != IntPtr.Zero)
+            {
+                IntPtr childWorker = FindWindowEx(progman, IntPtr.Zero, "WorkerW", null);
+                if (childWorker != IntPtr.Zero)
+                {
+                    return childWorker;
+                }
+            }
+
+            // Strategy 2: Sibling WorkerW directly following top-level window hosting SHELLDLL_DefView
+            EnumWindows((hWnd, lParam) =>
+            {
+                IntPtr shellDll = FindWindowEx(hWnd, IntPtr.Zero, "SHELLDLL_DefView", null);
+                if (shellDll != IntPtr.Zero)
+                {
+                    IntPtr sibling = FindWindowEx(IntPtr.Zero, hWnd, "WorkerW", null);
+                    if (sibling != IntPtr.Zero)
+                    {
+                        targetParent = sibling;
+                        return false;
+                    }
+                }
+                return true;
+            }, IntPtr.Zero);
+
+            if (targetParent != IntPtr.Zero) return targetParent;
+
+            // Strategy 3: Any top-level WorkerW that does not contain SHELLDLL_DefView
+            EnumWindows((hWnd, lParam) =>
+            {
+                StringBuilder sb = new StringBuilder(256);
+                GetClassName(hWnd, sb, 256);
+                if (sb.ToString() == "WorkerW")
+                {
+                    IntPtr shellDll = FindWindowEx(hWnd, IntPtr.Zero, "SHELLDLL_DefView", null);
+                    if (shellDll == IntPtr.Zero)
+                    {
+                        targetParent = hWnd;
+                        return false;
+                    }
+                }
+                return true;
+            }, IntPtr.Zero);
+
+            if (targetParent != IntPtr.Zero) return targetParent;
+
+            // Strategy 4: Fallback to Progman
+            return progman;
+        }
+
+        /// <summary>
+        /// Docks the wallpaper form behind desktop icons, accurately mapping screen coordinates.
         /// </summary>
         public static bool AttachToDesktop(IntPtr formHandle, Rectangle? customBounds = null)
         {
             try
             {
-                // 1. Fetch Progman handle
-                IntPtr progman = FindWindow("Progman", null);
-                if (progman == IntPtr.Zero)
+                IntPtr targetParent = FindWallpaperParent();
+                var screenBounds = customBounds ?? SystemInformation.VirtualScreen;
+
+                // Map screen bounds to targetParent's client coordinates
+                POINT pt = new POINT { X = screenBounds.X, Y = screenBounds.Y };
+                if (targetParent != IntPtr.Zero)
                 {
-                    progman = FindWindow("Progman", "Program Manager");
+                    ScreenToClient(targetParent, ref pt);
                 }
 
-                if (progman != IntPtr.Zero)
-                {
-                    // 2. Send 0x052C message to Progman to spawn the background WorkerW layer
-                    SendMessageTimeout(
-                        progman,
-                        WM_SPAWN_WORKERW,
-                        new IntPtr(0xD),
-                        new IntPtr(0x1),
-                        0,
-                        1000,
-                        out _);
-                }
-
-                // 3. Find the dedicated background WorkerW (the one without SHELLDLL_DefView)
-                IntPtr wallpaperWorkerW = IntPtr.Zero;
-                IntPtr shellWorkerW = IntPtr.Zero;
-                IntPtr shellDefView = IntPtr.Zero;
-
-                EnumWindows((hWnd, lParam) =>
-                {
-                    var sb = new StringBuilder(256);
-                    GetClassName(hWnd, sb, sb.Capacity);
-                    string cls = sb.ToString();
-
-                    if (cls == "WorkerW")
-                    {
-                        IntPtr shell = FindWindowEx(hWnd, IntPtr.Zero, "SHELLDLL_DefView", null);
-                        if (shell != IntPtr.Zero)
-                        {
-                            shellWorkerW = hWnd;
-                            shellDefView = shell;
-                            // Check next sibling WorkerW
-                            IntPtr nextWorker = FindWindowEx(IntPtr.Zero, hWnd, "WorkerW", null);
-                            if (nextWorker != IntPtr.Zero)
-                            {
-                                wallpaperWorkerW = nextWorker;
-                            }
-                        }
-                        else
-                        {
-                            // A WorkerW window without SHELLDLL_DefView is the wallpaper layer
-                            if (wallpaperWorkerW == IntPtr.Zero)
-                            {
-                                wallpaperWorkerW = hWnd;
-                            }
-                        }
-                    }
-                    else if (cls == "Progman")
-                    {
-                        IntPtr shell = FindWindowEx(hWnd, IntPtr.Zero, "SHELLDLL_DefView", null);
-                        if (shell != IntPtr.Zero)
-                        {
-                            shellDefView = shell;
-                            shellWorkerW = hWnd;
-                        }
-                    }
-
-                    return true;
-                }, IntPtr.Zero);
-
-                // Target parent window: prefer wallpaperWorkerW, fallback to shellWorkerW or progman
-                IntPtr targetParent = (wallpaperWorkerW != IntPtr.Zero) ? wallpaperWorkerW :
-                                      (shellWorkerW != IntPtr.Zero) ? shellWorkerW : progman;
-
-                if (targetParent == IntPtr.Zero)
-                {
-                    return false;
-                }
-
-                // 4. Modify form extended style so it won't show on Alt+Tab or take keyboard focus
+                // 1. Toolwindow and no-activate extended style
                 int exStyle = GetWindowLong(formHandle, GWL_EXSTYLE);
                 SetWindowLong(formHandle, GWL_EXSTYLE, exStyle | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE);
 
-                // 5. Parent the form to the target background window
-                SetParent(formHandle, targetParent);
+                // 2. Set parent to target layer (behind icons)
+                if (targetParent != IntPtr.Zero)
+                {
+                    SetParent(formHandle, targetParent);
+                }
 
-                // 6. Cover screen bounds and place strictly at the BOTTOM of the Z-order behind icons
-                var bounds = customBounds ?? SystemInformation.VirtualScreen;
+                // 3. Position window behind icons at calculated client bounds
                 SetWindowPos(
                     formHandle,
                     HWND_BOTTOM,
-                    bounds.X,
-                    bounds.Y,
-                    bounds.Width,
-                    bounds.Height,
+                    pt.X,
+                    pt.Y,
+                    screenBounds.Width,
+                    screenBounds.Height,
                     SWP_SHOWWINDOW | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS);
 
-                // 7. Ensure SHELLDLL_DefView (the desktop icons) stays above wallpaper
-                if (shellDefView != IntPtr.Zero)
-                {
-                    SetWindowPos(shellDefView, IntPtr.Zero, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
-                }
-
+                AppLogger.Log($"Attached Form 0x{formHandle:X} to Parent 0x{targetParent:X}. Screen: {screenBounds} -> Client: ({pt.X},{pt.Y})");
                 return true;
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error attaching to desktop: {ex.Message}");
+                AppLogger.Log($"Attach error: {ex.Message}");
                 return false;
             }
         }

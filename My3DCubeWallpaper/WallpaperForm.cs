@@ -16,8 +16,44 @@ namespace My3DCubeWallpaper
         private bool _isAttached = false;
         private readonly string _targetUrl;
 
+        private static CoreWebView2Environment? _sharedEnv;
+        private static readonly System.Threading.SemaphoreSlim _envLock = new(1, 1);
+
         public Screen TargetScreen => _screen;
         public int MonitorIndex => _monitorIndex;
+
+        protected override CreateParams CreateParams
+        {
+            get
+            {
+                CreateParams cp = base.CreateParams;
+                cp.ExStyle |= 0x00000080; // WS_EX_TOOLWINDOW
+                cp.ExStyle |= 0x08000000; // WS_EX_NOACTIVATE
+                return cp;
+            }
+        }
+
+        private static async Task<CoreWebView2Environment> GetSharedEnvironmentAsync()
+        {
+            if (_sharedEnv != null) return _sharedEnv;
+            await _envLock.WaitAsync();
+            try
+            {
+                if (_sharedEnv == null)
+                {
+                    string userDataDir = System.IO.Path.Combine(
+                        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                        "My3DCubeWallpaper", "WebView2");
+                    System.IO.Directory.CreateDirectory(userDataDir);
+                    _sharedEnv = await CoreWebView2Environment.CreateAsync(null, userDataDir);
+                }
+                return _sharedEnv;
+            }
+            finally
+            {
+                _envLock.Release();
+            }
+        }
 
         public WallpaperForm(Screen screen, int monitorIndex, string? baseUrl = null)
         {
@@ -49,14 +85,16 @@ namespace My3DCubeWallpaper
         {
             base.OnLoad(e);
 
-            // 1. Attach behind desktop icons covering this monitor's bounds
+            AppLogger.Log($"WallpaperForm OnLoad for Monitor {_monitorIndex} ({_screen.DeviceName})...");
             _isAttached = DesktopHook.AttachToDesktop(Handle, _screen.Bounds);
 
-            // 2. Initialize WebView2
+            // 2. Initialize WebView2 with shared environment
             try
             {
-                var env = await CoreWebView2Environment.CreateAsync();
+                var env = await GetSharedEnvironmentAsync();
+                AppLogger.Log($"Shared WebView2 environment ready. Initializing WebView2 on Monitor {_monitorIndex}...");
                 await _webView.EnsureCoreWebView2Async(env);
+                AppLogger.Log($"WebView2 initialized successfully on Monitor {_monitorIndex}. Navigating to {_targetUrl}...");
 
                 if (_webView.CoreWebView2 != null)
                 {
@@ -70,6 +108,7 @@ namespace My3DCubeWallpaper
             }
             catch (Exception ex)
             {
+                AppLogger.Log($"ERROR initializing WebView2 on Monitor {_monitorIndex}: {ex}");
                 MessageBox.Show(
                     $"Unable to initialize WebView2 on monitor {_monitorIndex + 1}:\n{ex.Message}\n\nPlease ensure Edge WebView2 Runtime is installed.",
                     "My-3D-Cube Wallpaper Error",
@@ -120,6 +159,14 @@ namespace My3DCubeWallpaper
             }
         }
 
+        public async Task SendMouseMoveAsync(int clientX, int clientY)
+        {
+            if (_webView.CoreWebView2 != null)
+            {
+                await _webView.CoreWebView2.ExecuteScriptAsync($"window.postMessage({{ action: 'mouseMove', clientX: {clientX}, clientY: {clientY} }}, '*');");
+            }
+        }
+
         public void Reload()
         {
             _webView.Reload();
@@ -127,6 +174,7 @@ namespace My3DCubeWallpaper
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
+            AppLogger.Log($"WallpaperForm OnFormClosing on Monitor {_monitorIndex}: CloseReason={e.CloseReason}, Cancel={e.Cancel}");
             DesktopHook.DetachFromDesktop(Handle);
             base.OnFormClosing(e);
         }

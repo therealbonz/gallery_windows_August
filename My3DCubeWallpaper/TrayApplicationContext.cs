@@ -22,6 +22,7 @@ namespace My3DCubeWallpaper
         public TrayApplicationContext(string? baseUrl = null)
         {
             _baseUrl = baseUrl;
+            AppLogger.Log($"TrayApplicationContext starting. Found {Screen.AllScreens.Length} screens.");
 
             // 1. Spawn a WallpaperForm for every connected display
             InitializeMonitors();
@@ -29,9 +30,10 @@ namespace My3DCubeWallpaper
             // 2. Listen to display changes (plug/unplug monitors)
             SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
 
-            // 3. Initialize low-level desktop drag hook
+            // 3. Initialize low-level desktop drag and hover hook
             _mouseHook = new GlobalMouseHook();
             _mouseHook.DragRotate += OnGlobalDragRotate;
+            _mouseHook.MouseHover += OnGlobalMouseMove;
 
             // 4. Build ContextMenuStrip
             var contextMenu = new ContextMenuStrip();
@@ -181,6 +183,25 @@ namespace My3DCubeWallpaper
             }
         }
 
+        private void OnGlobalMouseMove(Point pt)
+        {
+            try
+            {
+                var screen = Screen.FromPoint(pt);
+                var targetForm = _wallpaperForms.FirstOrDefault(f => f.TargetScreen.DeviceName == screen.DeviceName);
+                if (targetForm != null)
+                {
+                    int localX = pt.X - screen.Bounds.X;
+                    int localY = pt.Y - screen.Bounds.Y;
+                    _ = targetForm.SendMouseMoveAsync(localX, localY);
+                }
+            }
+            catch
+            {
+                // Non-critical hover failure ignored
+            }
+        }
+
         private async Task SetSpeedAll(double speed, object? sender)
         {
             if (sender is ToolStripMenuItem item && item.OwnerItem is ToolStripMenuItem parent)
@@ -251,6 +272,7 @@ namespace My3DCubeWallpaper
 
         private void ExitApp()
         {
+            AppLogger.Log("ExitApp invoked.");
             SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged;
             _mouseHook?.Dispose();
 
@@ -273,6 +295,7 @@ namespace My3DCubeWallpaper
 
         protected override void Dispose(bool disposing)
         {
+            AppLogger.Log($"TrayApplicationContext Dispose: disposing={disposing}");
             if (disposing)
             {
                 SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged;

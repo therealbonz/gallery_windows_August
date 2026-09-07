@@ -17,17 +17,35 @@ static class Program
     {
         try
         {
+            DesktopHook.EnsureDefaultDesktop();
+
             const string mutexName = "Local\\My3DCubeWallpaper_SingleInstance_Mutex";
-            _singleInstanceMutex = new Mutex(true, mutexName, out bool isNewInstance);
+            bool isNewInstance;
+            try
+            {
+                _singleInstanceMutex = new Mutex(true, mutexName, out isNewInstance);
+            }
+            catch (AbandonedMutexException)
+            {
+                isNewInstance = true;
+            }
 
             if (!isNewInstance)
             {
-                MessageBox.Show(
-                    "My-3D-Cube Wallpaper is already running in your System Tray.\n\nLook for the 3D Cube icon near your Windows clock.",
-                    "Already Running",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Information);
-                return;
+                var currentPid = Environment.ProcessId;
+                var others = System.Diagnostics.Process.GetProcessesByName("My3DCubeWallpaper")
+                    .Where(p => p.Id != currentPid)
+                    .ToArray();
+
+                if (others.Length > 0)
+                {
+                    MessageBox.Show(
+                        "My-3D-Cube Wallpaper is already running in your System Tray.\n\nLook for the 3D Cube icon near your Windows clock.",
+                        "Already Running",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Information);
+                    return;
+                }
             }
 
             // Enable true Per-Monitor V2 DPI Awareness to prevent display gaps across scaled monitors
@@ -39,14 +57,21 @@ static class Program
 
             ApplicationConfiguration.Initialize();
 
+            Application.ThreadException += (s, e) => AppLogger.Log($"Application.ThreadException: {e.Exception}");
+            AppDomain.CurrentDomain.UnhandledException += (s, e) => AppLogger.Log($"AppDomain.UnhandledException: {e.ExceptionObject}");
+            Application.ApplicationExit += (s, e) => AppLogger.Log("Application.ApplicationExit triggered.");
+
             string? targetUrl = args.Length > 0 ? args[0] : null;
+            AppLogger.Log($"Starting TrayApplicationContext (targetUrl: {targetUrl ?? "default"})...");
 
             Application.Run(new TrayApplicationContext(targetUrl));
 
+            AppLogger.Log("Application.Run returned.");
             GC.KeepAlive(_singleInstanceMutex);
         }
         catch (Exception ex)
         {
+            AppLogger.Log($"FATAL Main Exception: {ex}");
             string logPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "crash.log");
             File.WriteAllText(logPath, ex.ToString());
             MessageBox.Show(

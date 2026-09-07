@@ -24,3 +24,4 @@ bld/
 ## WebView2 user data cache
 *.WebView2/
 EBWebView/
+*.log

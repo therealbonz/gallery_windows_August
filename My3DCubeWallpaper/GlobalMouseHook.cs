@@ -21,6 +21,8 @@ namespace My3DCubeWallpaper
         private Point _lastPoint = Point.Empty;
 
         public event Action<Point, int, int>? DragRotate;
+        public event Action<Point>? MouseHover;
+        private long _lastHoverTick = 0;
 
         public GlobalMouseHook()
         {
@@ -62,6 +64,18 @@ namespace My3DCubeWallpaper
                         {
                             DragRotate?.Invoke(pt, deltaX, deltaY);
                             _lastPoint = pt;
+                        }
+                    }
+                    else
+                    {
+                        long now = Environment.TickCount64;
+                        if (now - _lastHoverTick >= 25)
+                        {
+                            _lastHoverTick = now;
+                            if (IsDesktopWindowAt(pt))
+                            {
+                                MouseHover?.Invoke(pt);
+                            }
                         }
                     }
                 }
