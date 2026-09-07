@@ -161,49 +161,17 @@ namespace My3DCubeWallpaper
 
         private static Icon CreateCubeIcon()
         {
-            // Draw a high-contrast 3D isometric cube icon
-            using var bmp = new Bitmap(32, 32);
-            using var g = Graphics.FromImage(bmp);
-            g.SmoothingMode = SmoothingMode.AntiAlias;
-
-            // Isometric 3D cube vertices
-            PointF top = new PointF(16, 3);
-            PointF topRight = new PointF(29, 10);
-            PointF topLeft = new PointF(3, 10);
-            PointF center = new PointF(16, 17);
-            PointF bottomRight = new PointF(29, 25);
-            PointF bottomLeft = new PointF(3, 25);
-            PointF bottom = new PointF(16, 31);
-
-            // Top Face (Cyan)
-            using (var brush = new SolidBrush(Color.FromArgb(56, 189, 248)))
+            try
             {
-                g.FillPolygon(brush, new PointF[] { top, topRight, center, topLeft });
+                string iconPath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "app.ico");
+                if (System.IO.File.Exists(iconPath))
+                {
+                    return new Icon(iconPath);
+                }
             }
+            catch { }
 
-            // Right Face (Deep Blue)
-            using (var brush = new SolidBrush(Color.FromArgb(37, 99, 235)))
-            {
-                g.FillPolygon(brush, new PointF[] { center, topRight, bottomRight, bottom });
-            }
-
-            // Left Face (Indigo/Purple)
-            using (var brush = new SolidBrush(Color.FromArgb(99, 102, 241)))
-            {
-                g.FillPolygon(brush, new PointF[] { topLeft, center, bottom, bottomLeft });
-            }
-
-            // Outer edges
-            using (var pen = new Pen(Color.FromArgb(240, 249, 255), 1.5f))
-            {
-                g.DrawPolygon(pen, new PointF[] { top, topRight, bottomRight, bottom, bottomLeft, topLeft });
-                g.DrawLine(pen, center, top);
-                g.DrawLine(pen, center, bottomLeft);
-                g.DrawLine(pen, center, bottomRight);
-            }
-
-            IntPtr hIcon = bmp.GetHicon();
-            return Icon.FromHandle(hIcon);
+            return SystemIcons.Application;
         }
 
         private void ExitApp()
