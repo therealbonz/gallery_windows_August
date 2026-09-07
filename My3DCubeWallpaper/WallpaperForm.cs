@@ -1,5 +1,6 @@
 using System;
 using System.Drawing;
+using System.Linq;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using Microsoft.Web.WebView2.Core;
@@ -188,6 +189,16 @@ namespace My3DCubeWallpaper
             if (_webView.CoreWebView2 != null)
             {
                 await _webView.CoreWebView2.ExecuteScriptAsync($"window.postMessage({{ action: 'screenCrack', clientX: {clientX}, clientY: {clientY} }}, '*');");
+            }
+        }
+
+        public async Task SendSystemAudioAsync(float[] bands, float bass, float mid, float treble)
+        {
+            if (_webView.CoreWebView2 != null)
+            {
+                string bStr = string.Join(",", bands.Select(b => b.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)));
+                string msg = $"{{\"action\":\"systemAudio\",\"bass\":{bass.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)},\"mid\":{mid.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)},\"treble\":{treble.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)},\"bands\":[{bStr}]}}";
+                await _webView.CoreWebView2.ExecuteScriptAsync($"window.postMessage({msg}, '*');");
             }
         }
 

@@ -39,12 +39,21 @@ static class Program
 
                 if (others.Length > 0)
                 {
-                    MessageBox.Show(
-                        "My-3D-Cube Wallpaper is already running in your System Tray.\n\nLook for the 3D Cube icon near your Windows clock.",
-                        "Already Running",
-                        MessageBoxButtons.OK,
-                        MessageBoxIcon.Information);
-                    return;
+                    AppLogger.Log($"Found {others.Length} running instance(s). Closing previous instance to apply update/relaunch...");
+                    foreach (var p in others)
+                    {
+                        try
+                        {
+                            p.CloseMainWindow();
+                            if (!p.WaitForExit(1500))
+                            {
+                                p.Kill();
+                                p.WaitForExit(1000);
+                            }
+                        }
+                        catch { }
+                    }
+                    Thread.Sleep(400);
                 }
             }
 

@@ -15,9 +15,11 @@ namespace My3DCubeWallpaper
         private readonly NotifyIcon _notifyIcon;
         private readonly List<WallpaperForm> _wallpaperForms = new();
         private readonly GlobalMouseHook _mouseHook;
+        private readonly SystemAudioCapture _systemAudio;
         private readonly string? _baseUrl;
         private const string AppRegistryKey = "My3DCubeWallpaper";
         private bool _isSpinning = true;
+        private string _audioMode = "system";
 
         public TrayApplicationContext(string? baseUrl = null)
         {
@@ -36,7 +38,12 @@ namespace My3DCubeWallpaper
             _mouseHook.MouseHover += OnGlobalMouseMove;
             _mouseHook.DesktopClick += OnGlobalDesktopClick;
 
-            // 4. Build ContextMenuStrip
+            // 4. Initialize WASAPI System Audio Loopback for Spotify & YouTube
+            _systemAudio = new SystemAudioCapture();
+            _systemAudio.AudioDataAvailable += OnAudioDataAvailable;
+            _systemAudio.Start();
+
+            // 5. Build ContextMenuStrip
             var contextMenu = new ContextMenuStrip();
             contextMenu.Font = new Font("Segoe UI", 9.5f, FontStyle.Regular);
 
@@ -107,11 +114,22 @@ namespace My3DCubeWallpaper
 
             // Audio Visualizer submenu
             var audioMenu = new ToolStripMenuItem("🎵 Music Visualizer");
-            var audioOff = new ToolStripMenuItem("Off", null, async (s, e) => await SetAudioAll("off", s)) { Checked = true };
+            var audioSystem = new ToolStripMenuItem("🎛️ Sync with System Audio (Spotify / YouTube)", null, async (s, e) => await SetAudioAll("system", s)) { Checked = true };
             var audioBeat = new ToolStripMenuItem("🥁 Synth Beat Demo", null, async (s, e) => await SetAudioAll("beat", s));
             var audioMic = new ToolStripMenuItem("🎤 Microphone / Music Listen", null, async (s, e) => await SetAudioAll("mic", s));
-            audioMenu.DropDownItems.AddRange(new ToolStripItem[] { audioOff, audioBeat, audioMic });
+            var audioOff = new ToolStripMenuItem("Off", null, async (s, e) => await SetAudioAll("off", s));
+            audioMenu.DropDownItems.AddRange(new ToolStripItem[] { audioSystem, audioBeat, audioMic, audioOff });
             contextMenu.Items.Add(audioMenu);
+
+            contextMenu.Items.Add(new ToolStripSeparator());
+
+            // Check for Updates item
+            var updateItem = new ToolStripMenuItem("🔄 Check for App Updates", null, async (s, e) =>
+            {
+                _notifyIcon?.ShowBalloonTip(2000, "My-3D-Cube", "Checking server for wallpaper updates...", ToolTipIcon.Info);
+                await AppUpdater.CheckAndUpdateAsync(showUpToDateMessage: true);
+            });
+            contextMenu.Items.Add(updateItem);
 
             contextMenu.Items.Add(new ToolStripSeparator());
 
@@ -153,6 +171,13 @@ namespace My3DCubeWallpaper
                 "My-3D-Cube Active",
                 $"Running across {screenCount} displays with interactive drag-rotation enabled!",
                 ToolTipIcon.Info);
+
+            // 6. Silent background update check after startup
+            Task.Run(async () =>
+            {
+                await Task.Delay(6000);
+                await AppUpdater.CheckAndUpdateAsync(showUpToDateMessage: false);
+            });
         }
 
         private void InitializeMonitors()
@@ -240,6 +265,15 @@ namespace My3DCubeWallpaper
             }
         }
 
+        private void OnAudioDataAvailable(float[] bands, float bass, float mid, float treble)
+        {
+            if (_audioMode != "system") return;
+            foreach (var form in _wallpaperForms)
+            {
+                _ = form.SendSystemAudioAsync(bands, bass, mid, treble);
+            }
+        }
+
         private async Task SetSpeedAll(double speed, object? sender)
         {
             if (sender is ToolStripMenuItem item && item.OwnerItem is ToolStripMenuItem parent)
@@ -276,6 +310,16 @@ namespace My3DCubeWallpaper
 
         private async Task SetAudioAll(string mode, object? sender)
         {
+            _audioMode = mode;
+            if (mode == "system")
+            {
+                _systemAudio.Start();
+            }
+            else
+            {
+                _systemAudio.Stop();
+            }
+
             if (sender is ToolStripMenuItem item && item.OwnerItem is ToolStripMenuItem parent)
             {
                 foreach (ToolStripItem child in parent.DropDownItems)
@@ -347,6 +391,7 @@ namespace My3DCubeWallpaper
             AppLogger.Log("ExitApp invoked.");
             SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged;
             _mouseHook?.Dispose();
+            _systemAudio?.Dispose();
 
             if (_notifyIcon != null)
             {
@@ -372,6 +417,7 @@ namespace My3DCubeWallpaper
             {
                 SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged;
                 _mouseHook?.Dispose();
+                _systemAudio?.Dispose();
                 _notifyIcon?.Dispose();
 
                 foreach (var form in _wallpaperForms)
