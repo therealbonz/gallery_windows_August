@@ -9,6 +9,9 @@ static class Program
 {
     private static Mutex? _singleInstanceMutex;
 
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool SetProcessDpiAwarenessContext(IntPtr dpiContext);
+
     [STAThread]
     static void Main(string[] args)
     {
@@ -26,6 +29,13 @@ static class Program
                     MessageBoxIcon.Information);
                 return;
             }
+
+            // Enable true Per-Monitor V2 DPI Awareness to prevent display gaps across scaled monitors
+            try
+            {
+                SetProcessDpiAwarenessContext(new IntPtr(-4));
+            }
+            catch { }
 
             ApplicationConfiguration.Initialize();
 

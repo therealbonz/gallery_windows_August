@@ -26,7 +26,7 @@ namespace My3DCubeWallpaper
 
             string baseUri = string.IsNullOrWhiteSpace(baseUrl) ? "http://162.35.101.183:5173" : baseUrl.TrimEnd('/');
             string separator = baseUri.Contains('?') ? "&" : "?";
-            _targetUrl = $"{baseUri}{separator}wallpaper=true&monitorIndex={_monitorIndex}";
+            _targetUrl = $"{baseUri}{separator}wallpaper=true&monitorIndex={_monitorIndex}&minimal=true";
 
             // Presentation settings
             FormBorderStyle = FormBorderStyle.None;
