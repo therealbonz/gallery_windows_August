@@ -11,22 +11,29 @@ namespace My3DCubeWallpaper
     public class WallpaperForm : Form
     {
         private readonly WebView2 _webView;
+        private readonly Screen _screen;
+        private readonly int _monitorIndex;
         private bool _isAttached = false;
-        private string _targetUrl = "http://162.35.101.183:5173/?wallpaper=true";
+        private readonly string _targetUrl;
 
-        public WallpaperForm(string? customUrl = null)
+        public Screen TargetScreen => _screen;
+        public int MonitorIndex => _monitorIndex;
+
+        public WallpaperForm(Screen screen, int monitorIndex, string? baseUrl = null)
         {
-            if (!string.IsNullOrWhiteSpace(customUrl))
-            {
-                _targetUrl = customUrl;
-            }
+            _screen = screen;
+            _monitorIndex = monitorIndex;
 
-            // Form presentation settings
+            string baseUri = string.IsNullOrWhiteSpace(baseUrl) ? "http://162.35.101.183:5173" : baseUrl.TrimEnd('/');
+            string separator = baseUri.Contains('?') ? "&" : "?";
+            _targetUrl = $"{baseUri}{separator}wallpaper=true&monitorIndex={_monitorIndex}";
+
+            // Presentation settings
             FormBorderStyle = FormBorderStyle.None;
             ShowInTaskbar = false;
             StartPosition = FormStartPosition.Manual;
-            Bounds = SystemInformation.VirtualScreen;
-            BackColor = Color.FromArgb(7, 9, 14); // Match deep space 3D background
+            Bounds = _screen.Bounds;
+            BackColor = Color.FromArgb(7, 9, 14);
 
             // WebView2 component
             _webView = new WebView2
@@ -36,17 +43,14 @@ namespace My3DCubeWallpaper
             };
 
             Controls.Add(_webView);
-
-            // Handle display resolution or monitor layout changes
-            SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
         }
 
         protected override async void OnLoad(EventArgs e)
         {
             base.OnLoad(e);
 
-            // 1. Attach behind desktop icons
-            _isAttached = DesktopHook.AttachToDesktop(Handle);
+            // 1. Attach behind desktop icons covering this monitor's bounds
+            _isAttached = DesktopHook.AttachToDesktop(Handle, _screen.Bounds);
 
             // 2. Initialize WebView2
             try
@@ -67,25 +71,19 @@ namespace My3DCubeWallpaper
             catch (Exception ex)
             {
                 MessageBox.Show(
-                    $"Unable to initialize WebView2 wallpaper engine:\n{ex.Message}\n\nPlease ensure Edge WebView2 Runtime is installed.",
+                    $"Unable to initialize WebView2 on monitor {_monitorIndex + 1}:\n{ex.Message}\n\nPlease ensure Edge WebView2 Runtime is installed.",
                     "My-3D-Cube Wallpaper Error",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Error);
             }
         }
 
-        private void OnDisplaySettingsChanged(object? sender, EventArgs e)
+        public void RealignToBounds(Rectangle bounds)
         {
-            if (InvokeRequired)
-            {
-                BeginInvoke(new Action(() => OnDisplaySettingsChanged(sender, e)));
-                return;
-            }
-
-            Bounds = SystemInformation.VirtualScreen;
+            Bounds = bounds;
             if (_isAttached)
             {
-                DesktopHook.AttachToDesktop(Handle);
+                DesktopHook.AttachToDesktop(Handle, bounds);
             }
         }
 
@@ -114,6 +112,14 @@ namespace My3DCubeWallpaper
             }
         }
 
+        public async Task SendDragRotateAsync(int deltaX, int deltaY)
+        {
+            if (_webView.CoreWebView2 != null)
+            {
+                await _webView.CoreWebView2.ExecuteScriptAsync($"window.postMessage({{ action: 'dragRotate', deltaX: {deltaX}, deltaY: {deltaY} }}, '*');");
+            }
+        }
+
         public void Reload()
         {
             _webView.Reload();
@@ -121,7 +127,6 @@ namespace My3DCubeWallpaper
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
-            SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged;
             DesktopHook.DetachFromDesktop(Handle);
             base.OnFormClosing(e);
         }

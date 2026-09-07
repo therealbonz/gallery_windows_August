@@ -53,7 +53,7 @@ namespace My3DCubeWallpaper
         /// <summary>
         /// Locates the WorkerW window directly behind desktop icons and docks the wallpaper window onto it.
         /// </summary>
-        public static bool AttachToDesktop(IntPtr formHandle)
+        public static bool AttachToDesktop(IntPtr formHandle, System.Drawing.Rectangle? customBounds = null)
         {
             try
             {
@@ -101,15 +101,15 @@ namespace My3DCubeWallpaper
                 // 5. Parent the form to WorkerW
                 SetParent(formHandle, workerW);
 
-                // 6. Cover the entire virtual screen bounds (supports multi-monitor setups)
-                var virtualBounds = SystemInformation.VirtualScreen;
+                // 6. Cover the screen bounds (supports multi-monitor setups)
+                var bounds = customBounds ?? SystemInformation.VirtualScreen;
                 SetWindowPos(
                     formHandle,
                     IntPtr.Zero,
-                    virtualBounds.X,
-                    virtualBounds.Y,
-                    virtualBounds.Width,
-                    virtualBounds.Height,
+                    bounds.X,
+                    bounds.Y,
+                    bounds.Width,
+                    bounds.Height,
                     SWP_SHOWWINDOW | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS);
 
                 return true;
