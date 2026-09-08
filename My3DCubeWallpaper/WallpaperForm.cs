@@ -192,14 +192,27 @@ namespace My3DCubeWallpaper
             }
         }
 
-        public async Task SendSystemAudioAsync(float[] bands, float bass, float mid, float treble)
+        public void SendSystemAudio(float[] bands, float bass, float mid, float treble)
         {
-            if (_webView.CoreWebView2 != null)
+            if (!IsHandleCreated || IsDisposed) return;
+
+            try
             {
-                string bStr = string.Join(",", bands.Select(b => b.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)));
-                string msg = $"{{\"action\":\"systemAudio\",\"bass\":{bass.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)},\"mid\":{mid.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)},\"treble\":{treble.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)},\"bands\":[{bStr}]}}";
-                await _webView.CoreWebView2.ExecuteScriptAsync($"window.postMessage({msg}, '*');");
+                BeginInvoke(new Action(() =>
+                {
+                    try
+                    {
+                        if (_webView?.CoreWebView2 != null)
+                        {
+                            string bStr = string.Join(",", bands.Select(b => b.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)));
+                            string msg = $"{{\"action\":\"systemAudio\",\"bass\":{bass.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)},\"mid\":{mid.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)},\"treble\":{treble.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)},\"bands\":[{bStr}]}}";
+                            _webView.CoreWebView2.PostWebMessageAsString(msg);
+                        }
+                    }
+                    catch { }
+                }));
             }
+            catch { }
         }
 
         public void Reload()

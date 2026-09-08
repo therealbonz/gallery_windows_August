@@ -10,7 +10,7 @@ namespace My3DCubeWallpaper
         private bool _isRunning = false;
         private readonly object _lock = new();
 
-        private const int FftSize = 256;
+        private const int FftSize = 512;
         private readonly float[] _sampleBuffer = new float[FftSize];
         private int _sampleCount = 0;
 
@@ -23,6 +23,7 @@ namespace My3DCubeWallpaper
         private float _bass = 0f;
         private float _mid = 0f;
         private float _treble = 0f;
+        private float _peakTracker = 0.05f;
 
         private long _lastDispatchTicks = 0;
 
@@ -90,45 +91,52 @@ namespace My3DCubeWallpaper
         {
             if (!_isRunning || _capture == null) return;
 
-            var waveFormat = _capture.WaveFormat;
-            int channels = waveFormat.Channels;
-            bool isFloat = waveFormat.Encoding == WaveFormatEncoding.IeeeFloat;
-            int bytesPerSample = waveFormat.BitsPerSample / 8;
-            int frameSize = channels * bytesPerSample;
-
-            int totalFrames = e.BytesRecorded / frameSize;
-            if (totalFrames <= 0) return;
-
-            for (int f = 0; f < totalFrames; f++)
+            try
             {
-                int offset = f * frameSize;
-                float mono = 0f;
+                var waveFormat = _capture.WaveFormat;
+                int channels = waveFormat.Channels;
+                bool isFloat = waveFormat.Encoding == WaveFormatEncoding.IeeeFloat;
+                int bytesPerSample = waveFormat.BitsPerSample / 8;
+                int frameSize = channels * bytesPerSample;
 
-                if (isFloat && bytesPerSample == 4)
+                int totalFrames = e.BytesRecorded / frameSize;
+                if (totalFrames <= 0) return;
+
+                for (int f = 0; f < totalFrames; f++)
                 {
-                    for (int ch = 0; ch < channels; ch++)
+                    int offset = f * frameSize;
+                    float mono = 0f;
+
+                    if (isFloat && bytesPerSample == 4)
                     {
-                        mono += BitConverter.ToSingle(e.Buffer, offset + ch * 4);
+                        for (int ch = 0; ch < channels; ch++)
+                        {
+                            mono += BitConverter.ToSingle(e.Buffer, offset + ch * 4);
+                        }
+                        mono /= channels;
                     }
-                    mono /= channels;
-                }
-                else if (bytesPerSample == 2)
-                {
-                    for (int ch = 0; ch < channels; ch++)
+                    else if (bytesPerSample == 2)
                     {
-                        short s = BitConverter.ToInt16(e.Buffer, offset + ch * 2);
-                        mono += s / 32768f;
+                        for (int ch = 0; ch < channels; ch++)
+                        {
+                            short s = BitConverter.ToInt16(e.Buffer, offset + ch * 2);
+                            mono += s / 32768f;
+                        }
+                        mono /= channels;
                     }
-                    mono /= channels;
-                }
 
-                _sampleBuffer[_sampleCount++] = mono;
+                    _sampleBuffer[_sampleCount++] = mono;
 
-                if (_sampleCount >= FftSize)
-                {
-                    _sampleCount = 0;
-                    ProcessFft();
+                    if (_sampleCount >= FftSize)
+                    {
+                        _sampleCount = 0;
+                        ProcessFft();
+                    }
                 }
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Log($"OnDataAvailable error: {ex.Message}");
             }
         }
 
@@ -142,43 +150,55 @@ namespace My3DCubeWallpaper
 
             ComputeFft(_real, _imag);
 
-            // Compute magnitudes for first FftSize / 2 bins
-            int half = FftSize / 2; // 128 bins
+            // Compute magnitudes for first FftSize / 2 bins (256 bins)
+            int half = FftSize / 2; // 256 bins
             float[] mag = new float[half];
+            float maxMag = 0.0001f;
             for (int i = 0; i < half; i++)
             {
                 mag[i] = (float)Math.Sqrt(_real[i] * _real[i] + _imag[i] * _imag[i]) / half;
+                if (mag[i] > maxMag) maxMag = mag[i];
             }
 
-            // 1. Sub-bass & Kick: bins 1 to 4 (~180 - 750 Hz)
-            float rawBass = 0f;
-            for (int i = 1; i <= 4; i++) rawBass += mag[i];
-            rawBass = Math.Clamp(rawBass * 1.8f, 0f, 1f);
+            // Automatic Gain Control (AGC): dynamically adapts so quiet/normal YouTube volume triggers full visualizer dance
+            if (maxMag > _peakTracker)
+                _peakTracker = _peakTracker * 0.6f + maxMag * 0.4f;
+            else
+                _peakTracker = Math.Max(0.005f, _peakTracker * 0.992f);
 
-            // 2. Mids: bins 5 to 16 (~750 - 3000 Hz)
-            float rawMid = 0f;
-            for (int i = 5; i <= 16; i++) rawMid += mag[i];
-            rawMid = Math.Clamp(rawMid * 2.2f, 0f, 1f);
+            float dynamicGain = Math.Clamp(1.0f / _peakTracker, 4.0f, 65.0f);
 
-            // 3. Treble: bins 17 to 48 (~3000 - 9000 Hz)
-            float rawTreble = 0f;
-            for (int i = 17; i <= 48; i++) rawTreble += mag[i];
-            rawTreble = Math.Clamp(rawTreble * 3.5f, 0f, 1f);
+            // 1. Sub-bass & Kick: Bins 0, 1, 2, 3 (~0 - 375 Hz at 48kHz)
+            float rawBass = (mag[0] * 1.5f + mag[1] * 2.0f + mag[2] * 1.8f + mag[3] * 1.2f) * dynamicGain * 0.45f;
+            rawBass = Math.Clamp(rawBass, 0f, 1f);
 
-            _bass = Math.Max(rawBass, _bass * 0.82f);
+            // 2. Mids: Bins 4 to 24 (~375 - 2,250 Hz)
+            float sumMid = 0f;
+            for (int i = 4; i <= 24; i++) sumMid += mag[i];
+            float rawMid = (sumMid / 21f) * dynamicGain * 1.8f;
+            rawMid = Math.Clamp(rawMid, 0f, 1f);
+
+            // 3. Treble: Bins 25 to 80 (~2,250 - 7,500 Hz)
+            float sumTreble = 0f;
+            for (int i = 25; i <= 80; i++) sumTreble += mag[i];
+            float rawTreble = (sumTreble / 56f) * dynamicGain * 2.8f;
+            rawTreble = Math.Clamp(rawTreble, 0f, 1f);
+
+            // Smooth response with punchy attack
+            _bass = Math.Max(rawBass, _bass * 0.78f);
             _mid = rawMid;
             _treble = rawTreble;
 
             // 4. 32 Equalizer Bands across first 64 bins (2 bins each)
             for (int b = 0; b < 32; b++)
             {
-                float sum = mag[b * 2] + mag[b * 2 + 1];
-                float boost = 1.0f + (b / 32.0f) * 1.8f; // high frequency tilt boost
-                float val = Math.Clamp(sum * 2.4f * boost, 0f, 1f);
-                _bands[b] = Math.Max(val, _bands[b] * 0.78f);
+                float sum = (mag[b * 2] + mag[b * 2 + 1]) * 0.5f;
+                float tiltBoost = 1.0f + (b / 32.0f) * 2.2f; // High frequency tilt
+                float val = Math.Clamp(sum * dynamicGain * tiltBoost * 1.1f, 0f, 1f);
+                _bands[b] = Math.Max(val, _bands[b] * 0.74f);
             }
 
-            // Throttle notification to ~35 FPS (~28 ms)
+            // Throttle dispatch to ~35 FPS (~28 ms)
             long now = Environment.TickCount64;
             if (now - _lastDispatchTicks >= 28)
             {

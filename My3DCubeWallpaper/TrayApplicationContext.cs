@@ -270,7 +270,7 @@ namespace My3DCubeWallpaper
             if (_audioMode != "system") return;
             foreach (var form in _wallpaperForms)
             {
-                _ = form.SendSystemAudioAsync(bands, bass, mid, treble);
+                form.SendSystemAudio(bands, bass, mid, treble);
             }
         }
 
