@@ -71,6 +71,7 @@ namespace My3DCubeWallpaper
                 // 2. Prepare restart batch script
                 string batchScript = Path.Combine(tempDir, "update_and_restart.bat");
                 int currentPid = Environment.ProcessId;
+                string exeDir = Path.GetDirectoryName(currentExePath) ?? AppDomain.CurrentDomain.BaseDirectory;
 
                 string scriptContent = $@"@echo off
 timeout /t 1 /nobreak >nul
@@ -82,6 +83,7 @@ if not errorlevel 1 (
 )
 timeout /t 1 /nobreak >nul
 copy /y ""{tempExe}"" ""{currentExePath}"" >nul
+cd /d ""{exeDir}""
 start """" ""{currentExePath}""
 del ""%~f0""
 ";
@@ -92,6 +94,7 @@ del ""%~f0""
                 {
                     FileName = "cmd.exe",
                     Arguments = $"/c \"{batchScript}\"",
+                    WorkingDirectory = exeDir,
                     CreateNoWindow = true,
                     UseShellExecute = false,
                     WindowStyle = ProcessWindowStyle.Hidden
