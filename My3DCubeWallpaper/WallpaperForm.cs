@@ -109,10 +109,10 @@ namespace My3DCubeWallpaper
                         try
                         {
                             string? rawJson = null;
-                            try { rawJson = args.WebMessageAsJson; } catch { }
+                            try { rawJson = args.TryGetWebMessageAsString(); } catch { }
                             if (string.IsNullOrEmpty(rawJson))
                             {
-                                try { rawJson = args.TryGetWebMessageAsString(); } catch { }
+                                try { rawJson = args.WebMessageAsJson; } catch { }
                             }
                             if (!string.IsNullOrEmpty(rawJson))
                             {
@@ -278,13 +278,34 @@ namespace My3DCubeWallpaper
                 {
                     using var doc = System.Text.Json.JsonDocument.Parse(json);
                     var root = doc.RootElement;
-                    if (root.TryGetProperty("action", out var action) && action.GetString() == "webrtcAnswer")
+                    if (root.ValueKind == System.Text.Json.JsonValueKind.String)
                     {
-                        if (root.TryGetProperty("sdp", out var sdpProp))
+                        var inner = root.GetString();
+                        if (!string.IsNullOrEmpty(inner))
                         {
-                            string? answerSdp = sdpProp.GetString();
-                            AppLogger.Log($"SendStreamOfferAsync: Received webrtcAnswer from web engine for face {faceIndex} ({answerSdp?.Length ?? 0} chars)");
-                            tcs.TrySetResult(answerSdp);
+                            using var innerDoc = System.Text.Json.JsonDocument.Parse(inner);
+                            var innerRoot = innerDoc.RootElement;
+                            if (innerRoot.TryGetProperty("action", out var innerAct) && innerAct.GetString() == "webrtcAnswer")
+                            {
+                                if (innerRoot.TryGetProperty("sdp", out var innerSdp))
+                                {
+                                    string? answerSdp = innerSdp.GetString();
+                                    AppLogger.Log($"SendStreamOfferAsync: Received webrtcAnswer (unwrapped string) from web engine for face {faceIndex} ({answerSdp?.Length ?? 0} chars)");
+                                    tcs.TrySetResult(answerSdp);
+                                }
+                            }
+                        }
+                    }
+                    else if (root.ValueKind == System.Text.Json.JsonValueKind.Object)
+                    {
+                        if (root.TryGetProperty("action", out var action) && action.GetString() == "webrtcAnswer")
+                        {
+                            if (root.TryGetProperty("sdp", out var sdpProp))
+                            {
+                                string? answerSdp = sdpProp.GetString();
+                                AppLogger.Log($"SendStreamOfferAsync: Received webrtcAnswer (direct object) from web engine for face {faceIndex} ({answerSdp?.Length ?? 0} chars)");
+                                tcs.TrySetResult(answerSdp);
+                            }
                         }
                     }
                 }
