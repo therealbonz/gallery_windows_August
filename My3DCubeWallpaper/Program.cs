@@ -32,6 +32,22 @@ static class Program
 
             if (!isNewInstance)
             {
+                if (args.Any(a => a.Equals("--cast", StringComparison.OrdinalIgnoreCase) || a.Equals("-cast", StringComparison.OrdinalIgnoreCase)))
+                {
+                    try
+                    {
+                        using var client = new System.Net.Http.HttpClient();
+                        client.Timeout = TimeSpan.FromSeconds(2);
+                        client.GetAsync($"http://127.0.0.1:{LocalStreamBridge.Port}/api/window-caster/show").GetAwaiter().GetResult();
+                        AppLogger.Log("Dispatched /api/window-caster/show to existing wallpaper instance.");
+                    }
+                    catch (Exception ex)
+                    {
+                        AppLogger.Log($"Could not trigger existing window caster: {ex.Message}");
+                    }
+                    return;
+                }
+
                 var currentPid = Environment.ProcessId;
                 var others = System.Diagnostics.Process.GetProcessesByName("My3DCubeWallpaper")
                     .Where(p => p.Id != currentPid)

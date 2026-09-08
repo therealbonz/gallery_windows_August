@@ -349,6 +349,21 @@ namespace My3DCubeWallpaper
             PostWebMessageSafe($"{{\"action\":\"stopChromeStream\",\"faceIndex\":{faceIndex}}}");
         }
 
+        public void StartWindowStream(int faceIndex, bool allFaces, string streamUrl)
+        {
+            var escapedUrl = System.Text.Json.JsonSerializer.Serialize(streamUrl);
+            string msg = $"{{\"action\":\"startWindowStream\",\"faceIndex\":{faceIndex},\"allFaces\":{(allFaces ? "true" : "false")},\"streamUrl\":{escapedUrl}}}";
+            AppLogger.Log($"StartWindowStream on Monitor {_monitorIndex}: {msg}");
+            PostWebMessageSafe(msg);
+        }
+
+        public void StopWindowStream(int faceIndex, bool allFaces)
+        {
+            string msg = $"{{\"action\":\"stopWindowStream\",\"faceIndex\":{faceIndex},\"allFaces\":{(allFaces ? "true" : "false")}}}";
+            AppLogger.Log($"StopWindowStream on Monitor {_monitorIndex}: {msg}");
+            PostWebMessageSafe(msg);
+        }
+
         public void Reload()
         {
             if (!IsHandleCreated || IsDisposed) return;

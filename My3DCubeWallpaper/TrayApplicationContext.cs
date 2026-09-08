@@ -17,6 +17,10 @@ namespace My3DCubeWallpaper
         private readonly GlobalMouseHook _mouseHook;
         private readonly SystemAudioCapture _systemAudio;
         private readonly LocalStreamBridge _streamBridge;
+        private readonly WindowCaptureService _captureService;
+        private WindowCastForm? _windowCastForm;
+        private System.Threading.Thread? _castFormThread;
+        private ToolStripMenuItem? _stopCastMenuItem;
         private readonly string? _baseUrl;
         private const string AppRegistryKey = "My3DCubeWallpaper";
         private bool _isSpinning = true;
@@ -115,6 +119,23 @@ namespace My3DCubeWallpaper
             };
             _streamBridge.Start();
 
+            // 4.6. Initialize WindowCaptureService for casting Windows applications
+            _captureService = new WindowCaptureService();
+            _streamBridge.CaptureService = _captureService;
+            _streamBridge.ShowWindowCasterHandler = () =>
+            {
+                AppLogger.Log("ShowWindowCasterHandler called from bridge.");
+                ShowWindowCastForm();
+            };
+            _streamBridge.StartWindowCastHandler = async (faceIdx, allFaces, streamUrl, monitorIdx) =>
+            {
+                await StartWindowCastAllAsync(faceIdx, allFaces, streamUrl, monitorIdx);
+            };
+            _streamBridge.StopWindowCastHandler = async (faceIdx, allFaces, monitorIdx) =>
+            {
+                await StopWindowCastAllAsync(faceIdx, allFaces, monitorIdx);
+            };
+
             // 5. Build ContextMenuStrip
             var contextMenu = new ContextMenuStrip();
             contextMenu.Font = new Font("Segoe UI", 9.5f, FontStyle.Regular);
@@ -127,6 +148,21 @@ namespace My3DCubeWallpaper
                 Font = new Font("Segoe UI", 9.5f, FontStyle.Bold)
             };
             contextMenu.Items.Add(titleItem);
+            contextMenu.Items.Add(new ToolStripSeparator());
+
+            // Cast Windows Window item
+            var castWindowItem = new ToolStripMenuItem("📺 Cast Windows Window to Cube...", null, (s, e) => ShowWindowCastForm())
+            {
+                Font = new Font("Segoe UI", 9.5f, FontStyle.Bold)
+            };
+            contextMenu.Items.Add(castWindowItem);
+
+            _stopCastMenuItem = new ToolStripMenuItem("⏹️ Stop Window Cast", null, async (s, e) => await StopWindowCastAllAsync())
+            {
+                Visible = false,
+                ForeColor = Color.IndianRed
+            };
+            contextMenu.Items.Add(_stopCastMenuItem);
             contextMenu.Items.Add(new ToolStripSeparator());
 
             // Refresh item
@@ -487,6 +523,110 @@ namespace My3DCubeWallpaper
             return SystemIcons.Application;
         }
 
+        private void ShowWindowCastForm()
+        {
+            try
+            {
+                AppLogger.Log("ShowWindowCastForm: opening dialog...");
+                if (_windowCastForm != null && !_windowCastForm.IsDisposed && _windowCastForm.IsHandleCreated)
+                {
+                    _windowCastForm.BeginInvoke(new Action(() =>
+                    {
+                        _windowCastForm.Show();
+                        _windowCastForm.WindowState = FormWindowState.Normal;
+                        _windowCastForm.BringToFront();
+                        _windowCastForm.Activate();
+                    }));
+                    return;
+                }
+
+                _castFormThread = new System.Threading.Thread(() =>
+                {
+                    try
+                    {
+                        DesktopHook.EnsureDefaultDesktop();
+                        _windowCastForm = new WindowCastForm(
+                            _captureService,
+                            StartWindowCastAllAsync,
+                            StopWindowCastAllAsync,
+                            () => {
+                                var sorted = _wallpaperForms.OrderBy(f => f.TargetScreen.Bounds.X).ToList();
+                                return sorted.Select((f, idx) => (object)new
+                                {
+                                    index = f.MonitorIndex,
+                                    name = $"Monitor {idx + 1} - {(idx == 0 ? "Left" : (idx == sorted.Count - 1 ? "Right (Desktop)" : "Middle"))} ({f.TargetScreen.Bounds.Width}x{f.TargetScreen.Bounds.Height})" + (f.TargetScreen.Primary ? " [Primary]" : ""),
+                                    deviceName = f.TargetScreen.DeviceName,
+                                    isPrimary = f.TargetScreen.Primary
+                                }).ToArray();
+                            }
+                        );
+                        AppLogger.Log("Starting Application.Run for WindowCastForm...");
+                        Application.Run(_windowCastForm);
+                        AppLogger.Log("Application.Run for WindowCastForm exited.");
+                    }
+                    catch (Exception ex)
+                    {
+                        AppLogger.Log($"_castFormThread uncaught exception: {ex}");
+                    }
+                });
+                _castFormThread.SetApartmentState(System.Threading.ApartmentState.STA);
+                _castFormThread.IsBackground = true;
+                _castFormThread.Start();
+                AppLogger.Log("ShowWindowCastForm: dialog thread started successfully.");
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Log($"ShowWindowCastForm error: {ex}");
+            }
+        }
+
+        private async Task StartWindowCastAllAsync(int faceIndex, bool allFaces, string streamUrl, int monitorIndex)
+        {
+            if (monitorIndex >= 0)
+            {
+                var target = _wallpaperForms.FirstOrDefault(f => f.MonitorIndex == monitorIndex);
+                target?.StartWindowStream(faceIndex, allFaces, streamUrl);
+            }
+            else
+            {
+                foreach (var form in _wallpaperForms)
+                {
+                    form.StartWindowStream(faceIndex, allFaces, streamUrl);
+                }
+            }
+
+            if (_stopCastMenuItem != null)
+            {
+                _stopCastMenuItem.Visible = true;
+            }
+            _notifyIcon?.ShowBalloonTip(3000, "My-3D-Cube Window Cast", $"Casting live window to {(allFaces ? "all 6 faces" : $"face {faceIndex}")}!", ToolTipIcon.Info);
+        }
+
+        private async Task StopWindowCastAllAsync(int faceIndex = -1, bool allFaces = true, int monitorIndex = -1)
+        {
+            _captureService.StopCapture();
+            _windowCastForm?.StopCurrentCast();
+
+            if (monitorIndex >= 0)
+            {
+                var target = _wallpaperForms.FirstOrDefault(f => f.MonitorIndex == monitorIndex);
+                target?.StopWindowStream(faceIndex, allFaces);
+            }
+            else
+            {
+                foreach (var form in _wallpaperForms)
+                {
+                    form.StopWindowStream(faceIndex, allFaces);
+                }
+            }
+
+            if (_stopCastMenuItem != null)
+            {
+                _stopCastMenuItem.Visible = false;
+            }
+            _notifyIcon?.ShowBalloonTip(2000, "My-3D-Cube", "Stopped window cast. Normal photo gallery restored.", ToolTipIcon.Info);
+        }
+
         private void ExitApp()
         {
             AppLogger.Log("ExitApp invoked.");
@@ -494,6 +634,12 @@ namespace My3DCubeWallpaper
             _mouseHook?.Dispose();
             _systemAudio?.Dispose();
             _streamBridge?.Dispose();
+            _captureService?.Dispose();
+
+            if (_windowCastForm != null && !_windowCastForm.IsDisposed)
+            {
+                _windowCastForm.Dispose();
+            }
 
             if (_notifyIcon != null)
             {
@@ -521,6 +667,8 @@ namespace My3DCubeWallpaper
                 _mouseHook?.Dispose();
                 _systemAudio?.Dispose();
                 _streamBridge?.Dispose();
+                _captureService?.Dispose();
+                _windowCastForm?.Dispose();
                 _notifyIcon?.Dispose();
 
                 foreach (var form in _wallpaperForms)

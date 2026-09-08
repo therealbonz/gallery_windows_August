@@ -1,5 +1,8 @@
 using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Text;
 using System.Text.Json;
@@ -19,6 +22,12 @@ namespace My3DCubeWallpaper
         public Action<int, int, string>? CandidateHandler { get; set; }
         public Action<int, int>? StopHandler { get; set; }
         public Func<object>? GetMonitorsHandler { get; set; }
+
+        // Window Caster extensions
+        public WindowCaptureService? CaptureService { get; set; }
+        public Action? ShowWindowCasterHandler { get; set; }
+        public Func<int, bool, string, int, Task>? StartWindowCastHandler { get; set; }
+        public Func<int, bool, int, Task>? StopWindowCastHandler { get; set; }
 
         public bool IsRunning => _isRunning;
 
@@ -91,7 +100,7 @@ namespace My3DCubeWallpaper
             var req = context.Request;
             var res = context.Response;
 
-            // Enable CORS for Chrome extension
+            // Enable CORS for Chrome extension & Web Gallery
             res.Headers.Add("Access-Control-Allow-Origin", "*");
             res.Headers.Add("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
             res.Headers.Add("Access-Control-Allow-Headers", "Content-Type, Authorization");
@@ -113,8 +122,10 @@ namespace My3DCubeWallpaper
                     {
                         status = "ok",
                         bridge = "My3DCubeWallpaper LocalStreamBridge",
-                        version = "1.0.0",
-                        active = true
+                        version = "1.2.0",
+                        active = true,
+                        isWindowCasting = CaptureService?.IsCapturing ?? false,
+                        windowCastSource = CaptureService?.CurrentSource?.Title
                     });
                     return;
                 }
@@ -125,6 +136,137 @@ namespace My3DCubeWallpaper
                     await WriteJsonResponseAsync(res, 200, new { monitors });
                     return;
                 }
+
+                #region Window Caster Endpoints
+
+                // 1. Live MJPEG Stream for Wallpaper View & Web Gallery
+                if (req.HttpMethod == "GET" && path == "/api/stream/window.mjpg")
+                {
+                    await HandleMjpegStreamAsync(context);
+                    return;
+                }
+
+                // 2. Single JPEG Preview Snapshot
+                if (req.HttpMethod == "GET" && path == "/api/stream/window/preview.jpg")
+                {
+                    var frame = CaptureService?.LatestJpegFrame;
+                    if (frame != null && frame.Length > 0)
+                    {
+                        res.ContentType = "image/jpeg";
+                        res.ContentLength64 = frame.Length;
+                        await res.OutputStream.WriteAsync(frame, 0, frame.Length);
+                        res.Close();
+                    }
+                    else
+                    {
+                        res.StatusCode = 204;
+                        res.Close();
+                    }
+                    return;
+                }
+
+                // 3. Enumerate Available Windows / Screens
+                if (req.HttpMethod == "GET" && path == "/api/windows")
+                {
+                    var windows = WindowCaptureService.GetAvailableCaptureSources().Select(w => new
+                    {
+                        hwnd = w.Hwnd.ToInt64(),
+                        title = w.Title,
+                        processName = w.ProcessName,
+                        isScreen = w.IsScreen,
+                        screenIndex = w.ScreenIndex,
+                        bounds = new { x = w.Bounds.X, y = w.Bounds.Y, width = w.Bounds.Width, height = w.Bounds.Height }
+                    }).ToArray();
+
+                    await WriteJsonResponseAsync(res, 200, new { windows });
+                    return;
+                }
+
+                // 4. Trigger Window Caster UI to Show
+                if (req.HttpMethod == "GET" && path == "/api/window-caster/show")
+                {
+                    ShowWindowCasterHandler?.Invoke();
+                    await WriteJsonResponseAsync(res, 200, new { success = true });
+                    return;
+                }
+
+                // 5. Start Window Cast via REST API
+                if (req.HttpMethod == "POST" && path == "/api/stream/window/start")
+                {
+                    using var reader = new StreamReader(req.InputStream, Encoding.UTF8);
+                    var body = await reader.ReadToEndAsync();
+                    using var doc = JsonDocument.Parse(body);
+                    var root = doc.RootElement;
+
+                    long hwndVal = root.TryGetProperty("hwnd", out var hProp) ? hProp.GetInt64() : 0;
+                    int faceIndex = ParseIntProperty(root, "faceIndex", -1);
+                    int monitorIndex = ParseIntProperty(root, "monitorIndex", -1);
+                    bool allFaces = root.TryGetProperty("allFaces", out var afProp) ? afProp.GetBoolean() : (faceIndex == -1);
+                    int fps = ParseIntProperty(root, "fps", 30);
+
+                    var allSources = WindowCaptureService.GetAvailableCaptureSources();
+                    var source = allSources.FirstOrDefault(s => s.Hwnd.ToInt64() == hwndVal) ?? allSources.FirstOrDefault();
+
+                    if (source != null && CaptureService != null)
+                    {
+                        CaptureService.StartCapture(source, fps);
+
+                        string streamUrl = $"http://127.0.0.1:{Port}/api/stream/window.mjpg?t={DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}";
+                        if (StartWindowCastHandler != null)
+                        {
+                            await StartWindowCastHandler.Invoke(faceIndex, allFaces, streamUrl, monitorIndex);
+                        }
+
+                        await WriteJsonResponseAsync(res, 200, new
+                        {
+                            success = true,
+                            windowTitle = source.Title,
+                            faceIndex,
+                            allFaces,
+                            monitorIndex,
+                            fps
+                        });
+                    }
+                    else
+                    {
+                        await WriteJsonResponseAsync(res, 400, new { error = "Target window source not found." });
+                    }
+                    return;
+                }
+
+                // 6. Stop Window Cast via REST API
+                if (req.HttpMethod == "POST" && path == "/api/stream/window/stop")
+                {
+                    using var reader = new StreamReader(req.InputStream, Encoding.UTF8);
+                    var body = await reader.ReadToEndAsync();
+                    int faceIndex = -1;
+                    int monitorIndex = -1;
+                    bool allFaces = true;
+                    try
+                    {
+                        if (!string.IsNullOrWhiteSpace(body))
+                        {
+                            using var doc = JsonDocument.Parse(body);
+                            faceIndex = ParseIntProperty(doc.RootElement, "faceIndex", -1);
+                            monitorIndex = ParseIntProperty(doc.RootElement, "monitorIndex", -1);
+                            allFaces = doc.RootElement.TryGetProperty("allFaces", out var af) ? af.GetBoolean() : (faceIndex == -1);
+                        }
+                    }
+                    catch { }
+
+                    CaptureService?.StopCapture();
+                    if (StopWindowCastHandler != null)
+                    {
+                        await StopWindowCastHandler.Invoke(faceIndex, allFaces, monitorIndex);
+                    }
+
+                    await WriteJsonResponseAsync(res, 200, new { success = true });
+                    return;
+                }
+
+                #endregion
+
+                #region Chrome Extension WebRTC Endpoints
 
                 if (req.HttpMethod == "POST" && path == "/api/stream/offer")
                 {
@@ -196,12 +338,14 @@ namespace My3DCubeWallpaper
                     }
                     catch { }
 
-                    AppLogger.Log($"LocalStreamBridge received STOP for face {faceIndex}, monitor {monitorIndex}");
+                    AppLogger.Log($"LocalStreamBridge received Chrome STOP for face {faceIndex}, monitor {monitorIndex}");
                     StopHandler?.Invoke(faceIndex, monitorIndex);
 
                     await WriteJsonResponseAsync(res, 200, new { success = true });
                     return;
                 }
+
+                #endregion
 
                 res.StatusCode = 404;
                 res.Close();
@@ -214,6 +358,71 @@ namespace My3DCubeWallpaper
                     await WriteJsonResponseAsync(res, 500, new { error = ex.Message });
                 }
                 catch { }
+            }
+        }
+
+        private async Task HandleMjpegStreamAsync(HttpListenerContext context)
+        {
+            var res = context.Response;
+            res.ContentType = "multipart/x-mixed-replace; boundary=--frame";
+            res.Headers.Add("Cache-Control", "no-cache, no-store, must-revalidate");
+            res.Headers.Add("Pragma", "no-cache");
+            res.Headers.Add("Expires", "0");
+            res.SendChunked = true;
+
+            var outputStream = res.OutputStream;
+            var frameSignal = new SemaphoreSlim(0, 10);
+            byte[]? pendingFrame = null;
+
+            Action<byte[]> onFrame = (frame) =>
+            {
+                pendingFrame = frame;
+                if (frameSignal.CurrentCount < 2)
+                {
+                    try { frameSignal.Release(); } catch { }
+                }
+            };
+
+            if (CaptureService != null)
+            {
+                CaptureService.FrameCaptured += onFrame;
+                if (CaptureService.LatestJpegFrame != null)
+                {
+                    onFrame(CaptureService.LatestJpegFrame);
+                }
+            }
+
+            try
+            {
+                while (_isRunning && (_cts == null || !_cts.IsCancellationRequested))
+                {
+                    bool signaled = await frameSignal.WaitAsync(1000);
+                    byte[]? frameToSend = pendingFrame;
+
+                    if (frameToSend != null && frameToSend.Length > 0)
+                    {
+                        string header = $"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: {frameToSend.Length}\r\n\r\n";
+                        byte[] headerBytes = Encoding.ASCII.GetBytes(header);
+                        byte[] footerBytes = Encoding.ASCII.GetBytes("\r\n");
+
+                        await outputStream.WriteAsync(headerBytes, 0, headerBytes.Length);
+                        await outputStream.WriteAsync(frameToSend, 0, frameToSend.Length);
+                        await outputStream.WriteAsync(footerBytes, 0, footerBytes.Length);
+                        await outputStream.FlushAsync();
+                    }
+                }
+            }
+            catch
+            {
+                // Client disconnected cleanly
+            }
+            finally
+            {
+                if (CaptureService != null)
+                {
+                    CaptureService.FrameCaptured -= onFrame;
+                }
+                try { res.Close(); } catch { }
             }
         }
 
