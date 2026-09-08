@@ -48,12 +48,16 @@ namespace My3DCubeWallpaper
             _streamBridge = new LocalStreamBridge();
             _streamBridge.GetMonitorsHandler = () =>
             {
-                return _wallpaperForms.Select(f => new
-                {
-                    index = f.MonitorIndex,
-                    name = $"Monitor {f.MonitorIndex + 1} ({f.TargetScreen.Bounds.Width}x{f.TargetScreen.Bounds.Height})" + (f.TargetScreen.Primary ? " [Primary]" : ""),
-                    deviceName = f.TargetScreen.DeviceName,
-                    isPrimary = f.TargetScreen.Primary
+                var sorted = _wallpaperForms.OrderBy(f => f.TargetScreen.Bounds.X).ToList();
+                return sorted.Select((f, idx) => {
+                    string loc = idx == 0 ? "Left" : (idx == sorted.Count - 1 ? "Right (Desktop)" : "Middle");
+                    return new
+                    {
+                        index = f.MonitorIndex,
+                        name = $"Monitor {idx + 1} - {loc} ({f.TargetScreen.Bounds.Width}x{f.TargetScreen.Bounds.Height})" + (f.TargetScreen.Primary ? " [Primary]" : ""),
+                        deviceName = f.TargetScreen.DeviceName,
+                        isPrimary = f.TargetScreen.Primary
+                    };
                 }).ToArray();
             };
             _streamBridge.OfferHandler = async (faceIndex, monitorIndex, sdp) =>
@@ -66,15 +70,15 @@ namespace My3DCubeWallpaper
 
                 if (targetForm == null)
                 {
-                    // Fallback to monitor 2 (rightmost desktop) or primary or first
-                    targetForm = _wallpaperForms.FirstOrDefault(f => f.MonitorIndex == 2)
+                    // Route fallback directly to the rightmost monitor where the desktop wallpaper is visible
+                    targetForm = _wallpaperForms.OrderByDescending(f => f.TargetScreen.Bounds.X).FirstOrDefault()
                               ?? _wallpaperForms.FirstOrDefault(f => f.TargetScreen.Primary)
                               ?? _wallpaperForms.FirstOrDefault();
                 }
 
                 if (targetForm != null)
                 {
-                    AppLogger.Log($"SendStreamOfferAsync: routing stream offer to Monitor {targetForm.MonitorIndex} ({targetForm.TargetScreen.DeviceName})");
+                    AppLogger.Log($"SendStreamOfferAsync: routing stream offer to Monitor {targetForm.MonitorIndex} ({targetForm.TargetScreen.DeviceName}, X={targetForm.TargetScreen.Bounds.X})");
                     return await targetForm.SendStreamOfferAsync(faceIndex, sdp);
                 }
                 return null;
