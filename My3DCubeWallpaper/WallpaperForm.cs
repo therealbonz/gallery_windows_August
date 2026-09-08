@@ -320,9 +320,9 @@ namespace My3DCubeWallpaper
             try
             {
                 var escapedSdp = System.Text.Json.JsonSerializer.Serialize(sdp);
-                var msg = $"{{\"action\":\"webrtcOffer\",\"faceIndex\":{faceIndex},\"sdp\":{escapedSdp}}}";
+                var msg = $"{{\"action\":\"webrtcOffer\",\"faceIndex\":{faceIndex},\"allFaces\":true,\"sdp\":{escapedSdp}}}";
 
-                AppLogger.Log($"SendStreamOfferAsync: Posting webrtcOffer to web engine on Monitor {_monitorIndex}...");
+                AppLogger.Log($"SendStreamOfferAsync: Posting webrtcOffer (allFaces: true) to web engine on Monitor {_monitorIndex}...");
                 PostWebMessageSafe(msg);
 
                 var completed = await Task.WhenAny(tcs.Task, Task.Delay(timeoutMs));

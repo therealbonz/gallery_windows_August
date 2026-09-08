@@ -133,11 +133,11 @@ namespace My3DCubeWallpaper
                     
                     using var doc = JsonDocument.Parse(body);
                     var root = doc.RootElement;
-                    int faceIndex = root.TryGetProperty("faceIndex", out var fi) ? fi.GetInt32() : 0;
-                    int monitorIndex = root.TryGetProperty("monitorIndex", out var mi) ? mi.GetInt32() : -1;
+                    int faceIndex = ParseIntProperty(root, "faceIndex", -1);
+                    int monitorIndex = ParseIntProperty(root, "monitorIndex", -1);
                     string sdp = root.TryGetProperty("sdp", out var s) ? s.GetString() ?? "" : "";
 
-                    AppLogger.Log($"LocalStreamBridge received WebRTC Offer for face {faceIndex}, monitor {monitorIndex} ({sdp.Length} chars)");
+                    AppLogger.Log($"LocalStreamBridge received WebRTC Offer for face {faceIndex} (all faces: {faceIndex == -1}), monitor {monitorIndex} ({sdp.Length} chars)");
 
                     string? answerSdp = null;
                     if (OfferHandler != null)
@@ -172,8 +172,8 @@ namespace My3DCubeWallpaper
 
                     using var doc = JsonDocument.Parse(body);
                     var root = doc.RootElement;
-                    int faceIndex = root.TryGetProperty("faceIndex", out var fi) ? fi.GetInt32() : 0;
-                    int monitorIndex = root.TryGetProperty("monitorIndex", out var mi) ? mi.GetInt32() : -1;
+                    int faceIndex = ParseIntProperty(root, "faceIndex", -1);
+                    int monitorIndex = ParseIntProperty(root, "monitorIndex", -1);
                     var candidateJson = root.TryGetProperty("candidate", out var c) ? c.GetRawText() : "{}";
 
                     CandidateHandler?.Invoke(faceIndex, monitorIndex, candidateJson);
@@ -186,19 +186,13 @@ namespace My3DCubeWallpaper
                 {
                     using var reader = new StreamReader(req.InputStream, Encoding.UTF8);
                     var body = await reader.ReadToEndAsync();
-                    int faceIndex = 0;
+                    int faceIndex = -1;
                     int monitorIndex = -1;
                     try
                     {
                         using var doc = JsonDocument.Parse(body);
-                        if (doc.RootElement.TryGetProperty("faceIndex", out var fi))
-                        {
-                            faceIndex = fi.GetInt32();
-                        }
-                        if (doc.RootElement.TryGetProperty("monitorIndex", out var mi))
-                        {
-                            monitorIndex = mi.GetInt32();
-                        }
+                        faceIndex = ParseIntProperty(doc.RootElement, "faceIndex", -1);
+                        monitorIndex = ParseIntProperty(doc.RootElement, "monitorIndex", -1);
                     }
                     catch { }
 
@@ -232,6 +226,24 @@ namespace My3DCubeWallpaper
             res.ContentLength64 = bytes.Length;
             await res.OutputStream.WriteAsync(bytes, 0, bytes.Length);
             res.Close();
+        }
+
+        private static int ParseIntProperty(JsonElement element, string propName, int defaultValue)
+        {
+            if (element.TryGetProperty(propName, out var prop))
+            {
+                if (prop.ValueKind == JsonValueKind.Number && prop.TryGetInt32(out int num))
+                {
+                    return num;
+                }
+                if (prop.ValueKind == JsonValueKind.String)
+                {
+                    var str = prop.GetString();
+                    if (int.TryParse(str, out int parsed)) return parsed;
+                    if (string.Equals(str, "all", StringComparison.OrdinalIgnoreCase)) return -1;
+                }
+            }
+            return defaultValue;
         }
 
         public void Dispose()
