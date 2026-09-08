@@ -108,7 +108,12 @@ namespace My3DCubeWallpaper
                     {
                         try
                         {
-                            var rawJson = args.TryGetWebMessageAsString();
+                            string? rawJson = null;
+                            try { rawJson = args.WebMessageAsJson; } catch { }
+                            if (string.IsNullOrEmpty(rawJson))
+                            {
+                                try { rawJson = args.TryGetWebMessageAsString(); } catch { }
+                            }
                             if (!string.IsNullOrEmpty(rawJson))
                             {
                                 WebMessageInbound?.Invoke(this, rawJson);
@@ -140,101 +145,131 @@ namespace My3DCubeWallpaper
             }
         }
 
+        public void PostWebMessageSafe(string json)
+        {
+            if (!IsHandleCreated || IsDisposed) return;
+
+            try
+            {
+                if (InvokeRequired)
+                {
+                    BeginInvoke(new Action(() =>
+                    {
+                        try
+                        {
+                            _webView?.CoreWebView2?.PostWebMessageAsString(json);
+                        }
+                        catch (Exception ex)
+                        {
+                            AppLogger.Log($"PostWebMessageSafe error on UI thread: {ex.Message}");
+                        }
+                    }));
+                }
+                else
+                {
+                    _webView?.CoreWebView2?.PostWebMessageAsString(json);
+                }
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Log($"PostWebMessageSafe invoke error: {ex.Message}");
+            }
+        }
+
+        public async Task ExecuteScriptSafeAsync(string script)
+        {
+            if (!IsHandleCreated || IsDisposed) return;
+
+            try
+            {
+                if (InvokeRequired)
+                {
+                    var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                    BeginInvoke(new Action(async () =>
+                    {
+                        try
+                        {
+                            if (_webView?.CoreWebView2 != null)
+                            {
+                                await _webView.CoreWebView2.ExecuteScriptAsync(script);
+                            }
+                            tcs.TrySetResult(true);
+                        }
+                        catch (Exception ex)
+                        {
+                            tcs.TrySetResult(false);
+                        }
+                    }));
+                    await tcs.Task;
+                }
+                else
+                {
+                    if (_webView?.CoreWebView2 != null)
+                    {
+                        await _webView.CoreWebView2.ExecuteScriptAsync(script);
+                    }
+                }
+            }
+            catch { }
+        }
+
         public async Task RefreshMediaAsync()
         {
-            if (_webView.CoreWebView2 != null)
-            {
-                await _webView.CoreWebView2.ExecuteScriptAsync("window.postMessage({ action: 'refresh' }, '*');");
-            }
+            await ExecuteScriptSafeAsync("window.postMessage({ action: 'refresh' }, '*');");
         }
 
         public async Task SetRotationSpeedAsync(double speed)
         {
-            if (_webView.CoreWebView2 != null)
-            {
-                await _webView.CoreWebView2.ExecuteScriptAsync($"window.postMessage({{ action: 'setSpeed', speed: {speed.ToString(System.Globalization.CultureInfo.InvariantCulture)} }}, '*');");
-            }
+            await ExecuteScriptSafeAsync($"window.postMessage({{ action: 'setSpeed', speed: {speed.ToString(System.Globalization.CultureInfo.InvariantCulture)} }}, '*');");
         }
 
         public async Task ToggleRotationAsync(bool? spin = null)
         {
-            if (_webView.CoreWebView2 != null)
-            {
-                string arg = spin.HasValue ? (spin.Value ? "true" : "false") : "undefined";
-                await _webView.CoreWebView2.ExecuteScriptAsync($"window.postMessage({{ action: 'toggleSpin', spin: {arg} }}, '*');");
-            }
+            string arg = spin.HasValue ? (spin.Value ? "true" : "false") : "undefined";
+            await ExecuteScriptSafeAsync($"window.postMessage({{ action: 'toggleSpin', spin: {arg} }}, '*');");
         }
 
         public async Task SendDragRotateAsync(int deltaX, int deltaY)
         {
-            if (_webView.CoreWebView2 != null)
-            {
-                await _webView.CoreWebView2.ExecuteScriptAsync($"window.postMessage({{ action: 'dragRotate', deltaX: {deltaX}, deltaY: {deltaY} }}, '*');");
-            }
+            await ExecuteScriptSafeAsync($"window.postMessage({{ action: 'dragRotate', deltaX: {deltaX}, deltaY: {deltaY} }}, '*');");
         }
 
         public async Task SendMouseMoveAsync(int clientX, int clientY)
         {
-            if (_webView.CoreWebView2 != null)
-            {
-                await _webView.CoreWebView2.ExecuteScriptAsync($"window.postMessage({{ action: 'mouseMove', clientX: {clientX}, clientY: {clientY} }}, '*');");
-            }
+            await ExecuteScriptSafeAsync($"window.postMessage({{ action: 'mouseMove', clientX: {clientX}, clientY: {clientY} }}, '*');");
         }
 
         public async Task SetWeatherAsync(string weather)
         {
-            if (_webView.CoreWebView2 != null)
-            {
-                await _webView.CoreWebView2.ExecuteScriptAsync($"window.postMessage({{ action: 'setWeather', weather: '{weather}' }}, '*');");
-            }
+            await ExecuteScriptSafeAsync($"window.postMessage({{ action: 'setWeather', weather: '{weather}' }}, '*');");
         }
 
         public async Task SetAudioModeAsync(string mode)
         {
-            if (_webView.CoreWebView2 != null)
-            {
-                await _webView.CoreWebView2.ExecuteScriptAsync($"window.postMessage({{ action: 'setAudioMode', mode: '{mode}' }}, '*');");
-            }
+            await ExecuteScriptSafeAsync($"window.postMessage({{ action: 'setAudioMode', mode: '{mode}' }}, '*');");
         }
 
         public async Task SendScreenCrackAsync(int clientX, int clientY)
         {
-            if (_webView.CoreWebView2 != null)
-            {
-                await _webView.CoreWebView2.ExecuteScriptAsync($"window.postMessage({{ action: 'screenCrack', clientX: {clientX}, clientY: {clientY} }}, '*');");
-            }
+            await ExecuteScriptSafeAsync($"window.postMessage({{ action: 'screenCrack', clientX: {clientX}, clientY: {clientY} }}, '*');");
         }
 
         public void SendSystemAudio(float[] bands, float bass, float mid, float treble)
         {
             if (!IsHandleCreated || IsDisposed) return;
 
-            try
-            {
-                BeginInvoke(new Action(() =>
-                {
-                    try
-                    {
-                        if (_webView?.CoreWebView2 != null)
-                        {
-                            string bStr = string.Join(",", bands.Select(b => b.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)));
-                            string msg = $"{{\"action\":\"systemAudio\",\"bass\":{bass.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)},\"mid\":{mid.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)},\"treble\":{treble.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)},\"bands\":[{bStr}]}}";
-                            _webView.CoreWebView2.PostWebMessageAsString(msg);
-                        }
-                    }
-                    catch { }
-                }));
-            }
-            catch { }
+            string bStr = string.Join(",", bands.Select(b => b.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)));
+            string msg = $"{{\"action\":\"systemAudio\",\"bass\":{bass.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)},\"mid\":{mid.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)},\"treble\":{treble.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)},\"bands\":[{bStr}]}}";
+            PostWebMessageSafe(msg);
         }
 
         public event EventHandler<string>? WebMessageInbound;
 
-        public async Task<string?> SendStreamOfferAsync(int faceIndex, string sdp, int timeoutMs = 8000)
+        public async Task<string?> SendStreamOfferAsync(int faceIndex, string sdp, int timeoutMs = 12000)
         {
-            if (!IsHandleCreated || IsDisposed || _webView?.CoreWebView2 == null) return null;
+            if (!IsHandleCreated || IsDisposed) return null;
 
-            var tcs = new TaskCompletionSource<string?>();
+            var tcs = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
 
             EventHandler<string>? handler = null;
             handler = (s, json) =>
@@ -247,11 +282,16 @@ namespace My3DCubeWallpaper
                     {
                         if (root.TryGetProperty("sdp", out var sdpProp))
                         {
-                            tcs.TrySetResult(sdpProp.GetString());
+                            string? answerSdp = sdpProp.GetString();
+                            AppLogger.Log($"SendStreamOfferAsync: Received webrtcAnswer from web engine for face {faceIndex} ({answerSdp?.Length ?? 0} chars)");
+                            tcs.TrySetResult(answerSdp);
                         }
                     }
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    AppLogger.Log($"Error parsing webrtcAnswer JSON: {ex.Message}");
+                }
             };
 
             WebMessageInbound += handler;
@@ -261,14 +301,8 @@ namespace My3DCubeWallpaper
                 var escapedSdp = System.Text.Json.JsonSerializer.Serialize(sdp);
                 var msg = $"{{\"action\":\"webrtcOffer\",\"faceIndex\":{faceIndex},\"sdp\":{escapedSdp}}}";
 
-                BeginInvoke(new Action(() =>
-                {
-                    try
-                    {
-                        _webView?.CoreWebView2?.PostWebMessageAsString(msg);
-                    }
-                    catch { }
-                }));
+                AppLogger.Log($"SendStreamOfferAsync: Posting webrtcOffer to web engine on Monitor {_monitorIndex}...");
+                PostWebMessageSafe(msg);
 
                 var completed = await Task.WhenAny(tcs.Task, Task.Delay(timeoutMs));
                 if (completed == tcs.Task)
@@ -286,33 +320,25 @@ namespace My3DCubeWallpaper
 
         public void SendIceCandidate(int faceIndex, string candidateJson)
         {
-            if (!IsHandleCreated || IsDisposed || _webView?.CoreWebView2 == null) return;
-            BeginInvoke(new Action(() =>
-            {
-                try
-                {
-                    _webView?.CoreWebView2?.PostWebMessageAsString($"{{\"action\":\"webrtcCandidate\",\"faceIndex\":{faceIndex},\"candidate\":{candidateJson}}}");
-                }
-                catch { }
-            }));
+            PostWebMessageSafe($"{{\"action\":\"webrtcCandidate\",\"faceIndex\":{faceIndex},\"candidate\":{candidateJson}}}");
         }
 
         public void StopStream(int faceIndex)
         {
-            if (!IsHandleCreated || IsDisposed || _webView?.CoreWebView2 == null) return;
-            BeginInvoke(new Action(() =>
-            {
-                try
-                {
-                    _webView?.CoreWebView2?.PostWebMessageAsString($"{{\"action\":\"stopChromeStream\",\"faceIndex\":{faceIndex}}}");
-                }
-                catch { }
-            }));
+            PostWebMessageSafe($"{{\"action\":\"stopChromeStream\",\"faceIndex\":{faceIndex}}}");
         }
 
         public void Reload()
         {
-            _webView.Reload();
+            if (!IsHandleCreated || IsDisposed) return;
+            if (InvokeRequired)
+            {
+                BeginInvoke(new Action(() => _webView.Reload()));
+            }
+            else
+            {
+                _webView.Reload();
+            }
         }
 
         protected override void OnFormClosing(FormClosingEventArgs e)
