@@ -20,7 +20,8 @@ namespace My3DCubeWallpaper
         private readonly string? _baseUrl;
         private const string AppRegistryKey = "My3DCubeWallpaper";
         private bool _isSpinning = true;
-        private string _audioMode = "system";
+        private string _audioMode = "off";
+        private ToolStripMenuItem? _audioMenu;
 
         public TrayApplicationContext(string? baseUrl = null)
         {
@@ -39,10 +40,9 @@ namespace My3DCubeWallpaper
             _mouseHook.MouseHover += OnGlobalMouseMove;
             _mouseHook.DesktopClick += OnGlobalDesktopClick;
 
-            // 4. Initialize WASAPI System Audio Loopback for Spotify & YouTube
+            // 4. Initialize WASAPI System Audio Loopback for Spotify & YouTube (starts in OFF mode until explicitly enabled)
             _systemAudio = new SystemAudioCapture();
             _systemAudio.AudioDataAvailable += OnAudioDataAvailable;
-            _systemAudio.Start();
 
             // 4.5. Initialize LocalStreamBridge for Chrome Extension WebRTC video streaming
             _streamBridge = new LocalStreamBridge();
@@ -139,13 +139,13 @@ namespace My3DCubeWallpaper
             contextMenu.Items.Add(weatherMenu);
 
             // Audio Visualizer submenu
-            var audioMenu = new ToolStripMenuItem("🎵 Music Visualizer");
-            var audioSystem = new ToolStripMenuItem("🎛️ Sync with System Audio (Spotify / YouTube)", null, async (s, e) => await SetAudioAll("system", s)) { Checked = true };
+            _audioMenu = new ToolStripMenuItem("🎵 Music Visualizer");
+            var audioSystem = new ToolStripMenuItem("🎛️ Sync with System Audio (Spotify / YouTube)", null, async (s, e) => await SetAudioAll("system", s));
             var audioBeat = new ToolStripMenuItem("🥁 Synth Beat Demo", null, async (s, e) => await SetAudioAll("beat", s));
             var audioMic = new ToolStripMenuItem("🎤 Microphone / Music Listen", null, async (s, e) => await SetAudioAll("mic", s));
-            var audioOff = new ToolStripMenuItem("Off", null, async (s, e) => await SetAudioAll("off", s));
-            audioMenu.DropDownItems.AddRange(new ToolStripItem[] { audioSystem, audioBeat, audioMic, audioOff });
-            contextMenu.Items.Add(audioMenu);
+            var audioOff = new ToolStripMenuItem("Off", null, async (s, e) => await SetAudioAll("off", s)) { Checked = true };
+            _audioMenu.DropDownItems.AddRange(new ToolStripItem[] { audioSystem, audioBeat, audioMic, audioOff });
+            contextMenu.Items.Add(_audioMenu);
 
             contextMenu.Items.Add(new ToolStripSeparator());
 
@@ -224,6 +224,22 @@ namespace My3DCubeWallpaper
             foreach (var screen in Screen.AllScreens)
             {
                 var form = new WallpaperForm(screen, monitorIndex++, _baseUrl);
+                form.WebMessageInbound += (s, json) =>
+                {
+                    try
+                    {
+                        using var doc = System.Text.Json.JsonDocument.Parse(json);
+                        if (doc.RootElement.TryGetProperty("action", out var actProp) && actProp.GetString() == "setAudioMode")
+                        {
+                            if (doc.RootElement.TryGetProperty("mode", out var modeProp))
+                            {
+                                string newMode = modeProp.GetString() ?? "off";
+                                _ = SetAudioAll(newMode, null);
+                            }
+                        }
+                    }
+                    catch { }
+                };
                 form.Show();
                 _wallpaperForms.Add(form);
             }
@@ -353,6 +369,19 @@ namespace My3DCubeWallpaper
                     if (child is ToolStripMenuItem mi) mi.Checked = false;
                 }
                 item.Checked = true;
+            }
+            else if (_audioMenu != null)
+            {
+                foreach (ToolStripItem child in _audioMenu.DropDownItems)
+                {
+                    if (child is ToolStripMenuItem mi)
+                    {
+                        mi.Checked = (mode == "system" && mi.Text?.Contains("Spotify") == true) ||
+                                     (mode == "beat" && mi.Text?.Contains("Beat") == true) ||
+                                     (mode == "mic" && mi.Text?.Contains("Microphone") == true) ||
+                                     (mode == "off" && mi.Text == "Off");
+                    }
+                }
             }
 
             foreach (var form in _wallpaperForms)
