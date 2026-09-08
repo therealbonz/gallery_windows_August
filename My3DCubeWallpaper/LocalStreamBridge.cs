@@ -15,9 +15,10 @@ namespace My3DCubeWallpaper
         private bool _isRunning = false;
         public const int Port = 48124;
 
-        public Func<int, string, Task<string?>>? OfferHandler { get; set; }
-        public Action<int, string>? CandidateHandler { get; set; }
-        public Action<int>? StopHandler { get; set; }
+        public Func<int, int, string, Task<string?>>? OfferHandler { get; set; }
+        public Action<int, int, string>? CandidateHandler { get; set; }
+        public Action<int, int>? StopHandler { get; set; }
+        public Func<object>? GetMonitorsHandler { get; set; }
 
         public bool IsRunning => _isRunning;
 
@@ -118,6 +119,13 @@ namespace My3DCubeWallpaper
                     return;
                 }
 
+                if (req.HttpMethod == "GET" && path == "/api/monitors")
+                {
+                    var monitors = GetMonitorsHandler?.Invoke() ?? Array.Empty<object>();
+                    await WriteJsonResponseAsync(res, 200, new { monitors });
+                    return;
+                }
+
                 if (req.HttpMethod == "POST" && path == "/api/stream/offer")
                 {
                     using var reader = new StreamReader(req.InputStream, Encoding.UTF8);
@@ -126,14 +134,15 @@ namespace My3DCubeWallpaper
                     using var doc = JsonDocument.Parse(body);
                     var root = doc.RootElement;
                     int faceIndex = root.TryGetProperty("faceIndex", out var fi) ? fi.GetInt32() : 0;
+                    int monitorIndex = root.TryGetProperty("monitorIndex", out var mi) ? mi.GetInt32() : -1;
                     string sdp = root.TryGetProperty("sdp", out var s) ? s.GetString() ?? "" : "";
 
-                    AppLogger.Log($"LocalStreamBridge received WebRTC Offer for face {faceIndex} ({sdp.Length} chars)");
+                    AppLogger.Log($"LocalStreamBridge received WebRTC Offer for face {faceIndex}, monitor {monitorIndex} ({sdp.Length} chars)");
 
                     string? answerSdp = null;
                     if (OfferHandler != null)
                     {
-                        answerSdp = await OfferHandler.Invoke(faceIndex, sdp);
+                        answerSdp = await OfferHandler.Invoke(faceIndex, monitorIndex, sdp);
                     }
 
                     if (!string.IsNullOrEmpty(answerSdp))
@@ -142,7 +151,8 @@ namespace My3DCubeWallpaper
                         {
                             type = "answer",
                             sdp = answerSdp,
-                            faceIndex = faceIndex
+                            faceIndex = faceIndex,
+                            monitorIndex = monitorIndex
                         });
                     }
                     else
@@ -163,9 +173,10 @@ namespace My3DCubeWallpaper
                     using var doc = JsonDocument.Parse(body);
                     var root = doc.RootElement;
                     int faceIndex = root.TryGetProperty("faceIndex", out var fi) ? fi.GetInt32() : 0;
+                    int monitorIndex = root.TryGetProperty("monitorIndex", out var mi) ? mi.GetInt32() : -1;
                     var candidateJson = root.TryGetProperty("candidate", out var c) ? c.GetRawText() : "{}";
 
-                    CandidateHandler?.Invoke(faceIndex, candidateJson);
+                    CandidateHandler?.Invoke(faceIndex, monitorIndex, candidateJson);
 
                     await WriteJsonResponseAsync(res, 200, new { success = true });
                     return;
@@ -176,6 +187,7 @@ namespace My3DCubeWallpaper
                     using var reader = new StreamReader(req.InputStream, Encoding.UTF8);
                     var body = await reader.ReadToEndAsync();
                     int faceIndex = 0;
+                    int monitorIndex = -1;
                     try
                     {
                         using var doc = JsonDocument.Parse(body);
@@ -183,11 +195,15 @@ namespace My3DCubeWallpaper
                         {
                             faceIndex = fi.GetInt32();
                         }
+                        if (doc.RootElement.TryGetProperty("monitorIndex", out var mi))
+                        {
+                            monitorIndex = mi.GetInt32();
+                        }
                     }
                     catch { }
 
-                    AppLogger.Log($"LocalStreamBridge received STOP for face {faceIndex}");
-                    StopHandler?.Invoke(faceIndex);
+                    AppLogger.Log($"LocalStreamBridge received STOP for face {faceIndex}, monitor {monitorIndex}");
+                    StopHandler?.Invoke(faceIndex, monitorIndex);
 
                     await WriteJsonResponseAsync(res, 200, new { success = true });
                     return;

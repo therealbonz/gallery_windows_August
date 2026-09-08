@@ -46,25 +46,67 @@ namespace My3DCubeWallpaper
 
             // 4.5. Initialize LocalStreamBridge for Chrome Extension WebRTC video streaming
             _streamBridge = new LocalStreamBridge();
-            _streamBridge.OfferHandler = async (faceIndex, sdp) =>
+            _streamBridge.GetMonitorsHandler = () =>
             {
-                var targetForm = _wallpaperForms.FirstOrDefault(f => f.MonitorIndex == 0) ?? _wallpaperForms.FirstOrDefault();
+                return _wallpaperForms.Select(f => new
+                {
+                    index = f.MonitorIndex,
+                    name = $"Monitor {f.MonitorIndex + 1} ({f.TargetScreen.Bounds.Width}x{f.TargetScreen.Bounds.Height})" + (f.TargetScreen.Primary ? " [Primary]" : ""),
+                    deviceName = f.TargetScreen.DeviceName,
+                    isPrimary = f.TargetScreen.Primary
+                }).ToArray();
+            };
+            _streamBridge.OfferHandler = async (faceIndex, monitorIndex, sdp) =>
+            {
+                WallpaperForm? targetForm = null;
+                if (monitorIndex >= 0)
+                {
+                    targetForm = _wallpaperForms.FirstOrDefault(f => f.MonitorIndex == monitorIndex);
+                }
+
+                if (targetForm == null)
+                {
+                    // Fallback to monitor 2 (rightmost desktop) or primary or first
+                    targetForm = _wallpaperForms.FirstOrDefault(f => f.MonitorIndex == 2)
+                              ?? _wallpaperForms.FirstOrDefault(f => f.TargetScreen.Primary)
+                              ?? _wallpaperForms.FirstOrDefault();
+                }
+
                 if (targetForm != null)
                 {
+                    AppLogger.Log($"SendStreamOfferAsync: routing stream offer to Monitor {targetForm.MonitorIndex} ({targetForm.TargetScreen.DeviceName})");
                     return await targetForm.SendStreamOfferAsync(faceIndex, sdp);
                 }
                 return null;
             };
-            _streamBridge.CandidateHandler = (faceIndex, candidateJson) =>
+            _streamBridge.CandidateHandler = (faceIndex, monitorIndex, candidateJson) =>
             {
-                var targetForm = _wallpaperForms.FirstOrDefault(f => f.MonitorIndex == 0) ?? _wallpaperForms.FirstOrDefault();
-                targetForm?.SendIceCandidate(faceIndex, candidateJson);
-            };
-            _streamBridge.StopHandler = (faceIndex) =>
-            {
-                foreach (var form in _wallpaperForms)
+                if (monitorIndex >= 0)
                 {
-                    form.StopStream(faceIndex);
+                    var targetForm = _wallpaperForms.FirstOrDefault(f => f.MonitorIndex == monitorIndex);
+                    targetForm?.SendIceCandidate(faceIndex, candidateJson);
+                }
+                else
+                {
+                    foreach (var form in _wallpaperForms)
+                    {
+                        form.SendIceCandidate(faceIndex, candidateJson);
+                    }
+                }
+            };
+            _streamBridge.StopHandler = (faceIndex, monitorIndex) =>
+            {
+                if (monitorIndex >= 0)
+                {
+                    var targetForm = _wallpaperForms.FirstOrDefault(f => f.MonitorIndex == monitorIndex);
+                    targetForm?.StopStream(faceIndex);
+                }
+                else
+                {
+                    foreach (var form in _wallpaperForms)
+                    {
+                        form.StopStream(faceIndex);
+                    }
                 }
             };
             _streamBridge.Start();
