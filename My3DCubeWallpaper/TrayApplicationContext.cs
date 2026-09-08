@@ -16,6 +16,7 @@ namespace My3DCubeWallpaper
         private readonly List<WallpaperForm> _wallpaperForms = new();
         private readonly GlobalMouseHook _mouseHook;
         private readonly SystemAudioCapture _systemAudio;
+        private readonly LocalStreamBridge _streamBridge;
         private readonly string? _baseUrl;
         private const string AppRegistryKey = "My3DCubeWallpaper";
         private bool _isSpinning = true;
@@ -42,6 +43,31 @@ namespace My3DCubeWallpaper
             _systemAudio = new SystemAudioCapture();
             _systemAudio.AudioDataAvailable += OnAudioDataAvailable;
             _systemAudio.Start();
+
+            // 4.5. Initialize LocalStreamBridge for Chrome Extension WebRTC video streaming
+            _streamBridge = new LocalStreamBridge();
+            _streamBridge.OfferHandler = async (faceIndex, sdp) =>
+            {
+                var targetForm = _wallpaperForms.FirstOrDefault(f => f.MonitorIndex == 0) ?? _wallpaperForms.FirstOrDefault();
+                if (targetForm != null)
+                {
+                    return await targetForm.SendStreamOfferAsync(faceIndex, sdp);
+                }
+                return null;
+            };
+            _streamBridge.CandidateHandler = (faceIndex, candidateJson) =>
+            {
+                var targetForm = _wallpaperForms.FirstOrDefault(f => f.MonitorIndex == 0) ?? _wallpaperForms.FirstOrDefault();
+                targetForm?.SendIceCandidate(faceIndex, candidateJson);
+            };
+            _streamBridge.StopHandler = (faceIndex) =>
+            {
+                foreach (var form in _wallpaperForms)
+                {
+                    form.StopStream(faceIndex);
+                }
+            };
+            _streamBridge.Start();
 
             // 5. Build ContextMenuStrip
             var contextMenu = new ContextMenuStrip();
@@ -392,6 +418,7 @@ namespace My3DCubeWallpaper
             SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged;
             _mouseHook?.Dispose();
             _systemAudio?.Dispose();
+            _streamBridge?.Dispose();
 
             if (_notifyIcon != null)
             {
@@ -418,6 +445,7 @@ namespace My3DCubeWallpaper
                 SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged;
                 _mouseHook?.Dispose();
                 _systemAudio?.Dispose();
+                _streamBridge?.Dispose();
                 _notifyIcon?.Dispose();
 
                 foreach (var form in _wallpaperForms)

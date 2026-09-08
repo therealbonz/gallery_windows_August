@@ -59,10 +59,21 @@ namespace My3DCubeWallpaper
                     return;
                 }
 
-                // If identical size and not a manual force check, consider up to date
-                if (currentSize == newFileInfo.Length && !showUpToDateMessage)
+                var currentVer = FileVersionInfo.GetVersionInfo(currentExePath);
+                var newVer = FileVersionInfo.GetVersionInfo(tempExe);
+
+                var curV = new Version(currentVer.FileMajorPart, currentVer.FileMinorPart, currentVer.FileBuildPart, currentVer.FilePrivatePart);
+                var newV = new Version(newVer.FileMajorPart, newVer.FileMinorPart, newVer.FileBuildPart, newVer.FilePrivatePart);
+
+                if (newV <= curV && !showUpToDateMessage)
                 {
-                    AppLogger.Log("Current binary matches server binary. Already up to date.");
+                    AppLogger.Log($"Current binary version ({curV}) is equal or newer than server binary ({newV}). Already up to date.");
+                    return;
+                }
+                else if (newV <= curV && showUpToDateMessage)
+                {
+                    AppLogger.Log("Already up to date.");
+                    MessageBox.Show("Your 3D Cube Wallpaper is already up to date!", "Update Check", MessageBoxButtons.OK, MessageBoxIcon.Information);
                     return;
                 }
 

@@ -104,6 +104,19 @@ namespace My3DCubeWallpaper
                     _webView.CoreWebView2.Settings.IsStatusBarEnabled = false;
                     _webView.CoreWebView2.Settings.IsZoomControlEnabled = false;
 
+                    _webView.CoreWebView2.WebMessageReceived += (s, args) =>
+                    {
+                        try
+                        {
+                            var rawJson = args.TryGetWebMessageAsString();
+                            if (!string.IsNullOrEmpty(rawJson))
+                            {
+                                WebMessageInbound?.Invoke(this, rawJson);
+                            }
+                        }
+                        catch { }
+                    };
+
                     _webView.Source = new Uri(_targetUrl);
                 }
             }
@@ -213,6 +226,88 @@ namespace My3DCubeWallpaper
                 }));
             }
             catch { }
+        }
+
+        public event EventHandler<string>? WebMessageInbound;
+
+        public async Task<string?> SendStreamOfferAsync(int faceIndex, string sdp, int timeoutMs = 8000)
+        {
+            if (!IsHandleCreated || IsDisposed || _webView?.CoreWebView2 == null) return null;
+
+            var tcs = new TaskCompletionSource<string?>();
+
+            EventHandler<string>? handler = null;
+            handler = (s, json) =>
+            {
+                try
+                {
+                    using var doc = System.Text.Json.JsonDocument.Parse(json);
+                    var root = doc.RootElement;
+                    if (root.TryGetProperty("action", out var action) && action.GetString() == "webrtcAnswer")
+                    {
+                        if (root.TryGetProperty("sdp", out var sdpProp))
+                        {
+                            tcs.TrySetResult(sdpProp.GetString());
+                        }
+                    }
+                }
+                catch { }
+            };
+
+            WebMessageInbound += handler;
+
+            try
+            {
+                var escapedSdp = System.Text.Json.JsonSerializer.Serialize(sdp);
+                var msg = $"{{\"action\":\"webrtcOffer\",\"faceIndex\":{faceIndex},\"sdp\":{escapedSdp}}}";
+
+                BeginInvoke(new Action(() =>
+                {
+                    try
+                    {
+                        _webView?.CoreWebView2?.PostWebMessageAsString(msg);
+                    }
+                    catch { }
+                }));
+
+                var completed = await Task.WhenAny(tcs.Task, Task.Delay(timeoutMs));
+                if (completed == tcs.Task)
+                {
+                    return await tcs.Task;
+                }
+                AppLogger.Log($"SendStreamOfferAsync timed out waiting for answer ({timeoutMs}ms).");
+                return null;
+            }
+            finally
+            {
+                WebMessageInbound -= handler;
+            }
+        }
+
+        public void SendIceCandidate(int faceIndex, string candidateJson)
+        {
+            if (!IsHandleCreated || IsDisposed || _webView?.CoreWebView2 == null) return;
+            BeginInvoke(new Action(() =>
+            {
+                try
+                {
+                    _webView?.CoreWebView2?.PostWebMessageAsString($"{{\"action\":\"webrtcCandidate\",\"faceIndex\":{faceIndex},\"candidate\":{candidateJson}}}");
+                }
+                catch { }
+            }));
+        }
+
+        public void StopStream(int faceIndex)
+        {
+            if (!IsHandleCreated || IsDisposed || _webView?.CoreWebView2 == null) return;
+            BeginInvoke(new Action(() =>
+            {
+                try
+                {
+                    _webView?.CoreWebView2?.PostWebMessageAsString($"{{\"action\":\"stopChromeStream\",\"faceIndex\":{faceIndex}}}");
+                }
+                catch { }
+            }));
         }
 
         public void Reload()
