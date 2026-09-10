@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net;
+using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
@@ -17,6 +18,15 @@ namespace My3DCubeWallpaper
         private CancellationTokenSource? _cts;
         private bool _isRunning = false;
         public const int Port = 48124;
+
+        private static readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromSeconds(3) };
+        private static readonly object _broadcastLock = new();
+        private static bool _isBroadcasting = false;
+        private static string? _broadcastStreamId = null;
+        private static string? _broadcastTitle = null;
+        private static int _broadcastFaceIndex = -1;
+        private static bool _broadcastAllFaces = true;
+        private static readonly ConcurrentDictionary<string, ConcurrentQueue<string>> _localSignalQueues = new();
 
         public Func<int, int, string, Task<string?>>? OfferHandler { get; set; }
         public Action<int, int, string>? CandidateHandler { get; set; }
@@ -122,10 +132,25 @@ namespace My3DCubeWallpaper
                     {
                         status = "ok",
                         bridge = "My3DCubeWallpaper LocalStreamBridge",
-                        version = "1.2.0",
+                        version = "1.3.0",
                         active = true,
+                        isBroadcasting = _isBroadcasting,
+                        broadcastStreamId = _broadcastStreamId,
                         isWindowCasting = CaptureService?.IsCapturing ?? false,
                         windowCastSource = CaptureService?.CurrentSource?.Title
+                    });
+                    return;
+                }
+
+                if (req.HttpMethod == "GET" && path == "/api/stream/status")
+                {
+                    await WriteJsonResponseAsync(res, 200, new
+                    {
+                        active = _isBroadcasting,
+                        streamId = _broadcastStreamId,
+                        title = _broadcastTitle,
+                        faceIndex = _broadcastFaceIndex,
+                        allFaces = _broadcastAllFaces
                     });
                     return;
                 }
@@ -342,6 +367,114 @@ namespace My3DCubeWallpaper
                     StopHandler?.Invoke(faceIndex, monitorIndex);
 
                     await WriteJsonResponseAsync(res, 200, new { success = true });
+                    return;
+                }
+
+                if (req.HttpMethod == "POST" && path == "/api/stream/broadcast/start")
+                {
+                    using var reader = new StreamReader(req.InputStream, Encoding.UTF8);
+                    var body = await reader.ReadToEndAsync();
+                    
+                    using var doc = JsonDocument.Parse(body);
+                    var root = doc.RootElement;
+                    string streamId = root.TryGetProperty("streamId", out var sProp) ? sProp.GetString() ?? "" : $"stream_{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}";
+                    string title = root.TryGetProperty("title", out var tProp) ? tProp.GetString() ?? "Chrome Video Sync" : "Chrome Video Sync";
+                    int faceIndex = ParseIntProperty(root, "faceIndex", -1);
+                    bool allFaces = !root.TryGetProperty("allFaces", out var afProp) || afProp.GetBoolean();
+
+                    lock (_broadcastLock)
+                    {
+                        _isBroadcasting = true;
+                        _broadcastStreamId = streamId;
+                        _broadcastTitle = title;
+                        _broadcastFaceIndex = faceIndex;
+                        _broadcastAllFaces = allFaces;
+                        _localSignalQueues.Clear();
+                    }
+
+                    AppLogger.Log($"LocalStreamBridge: Network broadcast started (id={streamId}, faces={(allFaces ? "all" : faceIndex.ToString())}, title='{title}')");
+
+                    // Notify central Rails API if available
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            var payload = new
+                            {
+                                active = true,
+                                stream_id = streamId,
+                                title = title,
+                                face_index = faceIndex,
+                                all_faces = allFaces,
+                                lan_bridge_url = $"http://127.0.0.1:{Port}"
+                            };
+                            var content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
+                            await _httpClient.PostAsync("http://162.35.101.183:3000/api/v1/stream/cast", content);
+                        }
+                        catch { }
+                    });
+
+                    await WriteJsonResponseAsync(res, 200, new { success = true, streamId });
+                    return;
+                }
+
+                if (req.HttpMethod == "POST" && path == "/api/stream/broadcast/stop")
+                {
+                    lock (_broadcastLock)
+                    {
+                        _isBroadcasting = false;
+                        _broadcastStreamId = null;
+                        _broadcastTitle = null;
+                        _localSignalQueues.Clear();
+                    }
+
+                    AppLogger.Log("LocalStreamBridge: Network broadcast stopped.");
+                    StopHandler?.Invoke(-1, -1);
+
+                    // Notify central Rails API
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            var payload = new { active = false };
+                            var content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
+                            await _httpClient.PostAsync("http://162.35.101.183:3000/api/v1/stream/cast", content);
+                        }
+                        catch { }
+                    });
+
+                    await WriteJsonResponseAsync(res, 200, new { success = true });
+                    return;
+                }
+
+                if (req.HttpMethod == "POST" && path == "/api/stream/signal")
+                {
+                    using var reader = new StreamReader(req.InputStream, Encoding.UTF8);
+                    var body = await reader.ReadToEndAsync();
+                    using var doc = JsonDocument.Parse(body);
+                    var root = doc.RootElement;
+                    string target = root.TryGetProperty("target", out var tp) ? tp.GetString() ?? "" : "";
+                    if (!string.IsNullOrWhiteSpace(target))
+                    {
+                        var queue = _localSignalQueues.GetOrAdd(target, _ => new ConcurrentQueue<string>());
+                        queue.Enqueue(body);
+                    }
+                    await WriteJsonResponseAsync(res, 200, new { success = true });
+                    return;
+                }
+
+                if (req.HttpMethod == "GET" && path == "/api/stream/signals")
+                {
+                    string receiverId = req.QueryString["receiver_id"] ?? "";
+                    var list = new List<object>();
+                    if (!string.IsNullOrWhiteSpace(receiverId) && _localSignalQueues.TryGetValue(receiverId, out var queue))
+                    {
+                        while (queue.TryDequeue(out var raw))
+                        {
+                            try { list.Add(JsonSerializer.Deserialize<JsonElement>(raw)); } catch { }
+                        }
+                    }
+                    await WriteJsonResponseAsync(res, 200, new { signals = list });
                     return;
                 }
 
