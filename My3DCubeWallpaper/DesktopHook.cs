@@ -77,20 +77,67 @@ namespace My3DCubeWallpaper
         [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
         private static extern int GetClassName(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
 
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetThreadDesktop(int dwThreadId);
+
+        [DllImport("kernel32.dll")]
+        private static extern int GetCurrentThreadId();
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool GetUserObjectInformation(IntPtr hObj, int nIndex, StringBuilder pvInfo, int nLength, out int lpnLengthNeeded);
+
+        public static bool IsDefaultDesktop()
+        {
+            try
+            {
+                IntPtr hDesk = GetThreadDesktop(GetCurrentThreadId());
+                if (hDesk == IntPtr.Zero) return false;
+                StringBuilder sb = new StringBuilder(256);
+                int needed;
+                if (GetUserObjectInformation(hDesk, 2, sb, 256, out needed))
+                {
+                    return string.Equals(sb.ToString(), "default", StringComparison.OrdinalIgnoreCase);
+                }
+            }
+            catch { }
+            return false;
+        }
+
+        public static bool TryEnsureDefaultDesktop()
+        {
+            try
+            {
+                if (IsDefaultDesktop()) return true;
+
+                IntPtr hDefault = OpenDesktop("default", 0, false, DESKTOP_ALL);
+                if (hDefault != IntPtr.Zero)
+                {
+                    if (SetThreadDesktop(hDefault))
+                    {
+                        AppLogger.Log("Successfully switched thread to 'default' desktop.");
+                        return true;
+                    }
+                    else
+                    {
+                        int err = Marshal.GetLastWin32Error();
+                        AppLogger.Log($"SetThreadDesktop failed on current thread (error {err}).");
+                        return false;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Log($"TryEnsureDefaultDesktop error: {ex.Message}");
+            }
+            return false;
+        }
+
         /// <summary>
         /// Ensures the calling thread is attached to the interactive "default" desktop session.
         /// </summary>
         public static void EnsureDefaultDesktop()
         {
-            try
-            {
-                IntPtr hDefault = OpenDesktop("default", 0, false, DESKTOP_ALL);
-                if (hDefault != IntPtr.Zero)
-                {
-                    SetThreadDesktop(hDefault);
-                }
-            }
-            catch { }
+            TryEnsureDefaultDesktop();
         }
 
         /// <summary>
