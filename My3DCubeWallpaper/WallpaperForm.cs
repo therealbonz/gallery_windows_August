@@ -103,6 +103,28 @@ namespace My3DCubeWallpaper
                     _webView.CoreWebView2.Settings.AreDevToolsEnabled = false;
                     _webView.CoreWebView2.Settings.IsStatusBarEnabled = false;
                     _webView.CoreWebView2.Settings.IsZoomControlEnabled = false;
+                    _webView.CoreWebView2.Settings.IsBuiltInErrorPageEnabled = false;
+
+                    _webView.CoreWebView2.ProcessFailed += (s, args) =>
+                    {
+                        AppLogger.Log($"WebView2 ProcessFailed on Monitor {_monitorIndex}: Kind={args.ProcessFailedKind}, Reason={args.Reason}, ExitCode={args.ExitCode}");
+                        if (args.ProcessFailedKind == CoreWebView2ProcessFailedKind.RenderProcessExited ||
+                            args.ProcessFailedKind == CoreWebView2ProcessFailedKind.RenderProcessUnresponsive)
+                        {
+                            AppLogger.Log($"ProcessFailed: Auto-recovering WebView2 on Monitor {_monitorIndex} in 1s...");
+                            Task.Delay(1000).ContinueWith(_ =>
+                            {
+                                try
+                                {
+                                    if (IsHandleCreated && !IsDisposed)
+                                    {
+                                        BeginInvoke(new Action(() => _webView?.Reload()));
+                                    }
+                                }
+                                catch { }
+                            });
+                        }
+                    };
 
                     _webView.CoreWebView2.WebMessageReceived += (s, args) =>
                     {
